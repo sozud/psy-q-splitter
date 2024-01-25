@@ -1,0 +1,3 @@
+[submodule "psy-q"]
+	path = psy-q
+	url = https://github.com/sozud/psy-q.git

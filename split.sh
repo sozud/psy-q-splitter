@@ -1,0 +1,1 @@
+cd splitter && cargo run --release ../psy-q/PSX/LIB/LIBSND.LIB ../output_directory
