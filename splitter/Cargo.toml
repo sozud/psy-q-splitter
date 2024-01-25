@@ -7,3 +7,7 @@ edition = "2021"
 
 [dependencies]
 rabbitizer = "1.8.1"
+
+[dev-dependencies]
+regex = "1.10.3"
+similar = "2.4.0"

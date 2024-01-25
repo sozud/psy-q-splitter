@@ -17,3 +17,6 @@ jobs:
 
     - name: Build
       run: sh split.sh
+
+    - name: Run tests
+      run: cd splitter && cargo test -- --nocapture

@@ -210,7 +210,7 @@ fn find_reloc(section: &Section, cur_offset: usize, instr: u32) -> Option<String
                     && right_value.type_ == RelocationTypes::Constant
                 {
                     if let Some(value) = right_value.value {
-                        let name = format!(".L_{:08X}", value);
+                        let name = format!(".L{:08X}", value);
                         // probably ought to look up section?
 
                         if right_value.offset == cur_offset {
@@ -228,15 +228,62 @@ fn find_reloc(section: &Section, cur_offset: usize, instr: u32) -> Option<String
 use std::fs;
 use std::io::Write;
 
-fn disassemble_obj(sections: &HashMap<usize, Section>, name: String, file_contents: &Vec<u8>, output_path: &String) {
-    // disassemble
+struct Func {
+    name: String,
+    code: String,
+}
 
-    struct Func {
-        name: String,
-        code: String,
+struct Obj {
+    name: String,
+    funcs: Vec<Func>,
+}
+
+fn generate_branch_targets(
+    file_contents: &Vec<u8>,
+    cur_offset_: usize,
+    start_offset: usize,
+    code: &CodeSection,
+    branch_target_source_map: &mut HashMap<usize, String>,
+    branch_target_destination_map: &mut HashMap<usize, String>,
+) {
+    let mut cur_offset = cur_offset_;
+    while cur_offset < start_offset + code.len as usize {
+        let symbol_addr = &(cur_offset - start_offset);
+        let instr: u32 = get32(&file_contents, cur_offset);
+        cur_offset += 4;
+        let instruction = Instruction::new(instr, 0, InstrCategory::CPU);
+        let thing = instruction.disassemble(None, 0);
+        if instruction.is_branch() {
+            let target_label = format!(
+                ".L{:08X}",
+                symbol_addr + instruction.branch_offset() as usize
+            );
+            println!(
+                "branch_offset {} {} {}",
+                thing.to_string(),
+                instruction.branch_offset(),
+                target_label
+            );
+            branch_target_destination_map.insert(
+                symbol_addr + instruction.branch_offset() as usize,
+                target_label.clone(),
+            );
+            branch_target_source_map.insert(*symbol_addr, target_label);
+        }
     }
+}
 
-    let mut funcs: Vec<Func> = Vec::new();
+fn disassemble_obj(
+    sections: &HashMap<usize, Section>,
+    name: String,
+    file_contents: &Vec<u8>,
+    output_path: &str,
+    objs: &mut Vec<Obj>,
+) {
+    let mut cur_obj = Obj {
+        name: name.clone(),
+        funcs: Vec::new(),
+    };
 
     for (number, section) in sections.iter() {
         println!("~section name {}", section.name);
@@ -268,7 +315,10 @@ fn disassemble_obj(sections: &HashMap<usize, Section>, name: String, file_conten
             println!("symbol name {}", symbol.name);
         }
 
-        let mut jump_target_map: HashMap<usize, String> = HashMap::new();
+        let mut branch_target_destination_map: HashMap<usize, String> = HashMap::new();
+
+        // relocs and branch targets need to have the same destination map
+        // or we get L_XXXXXX twice in output
 
         // generate jump target relocs
         for relocation in &section.relocations {
@@ -280,9 +330,9 @@ fn disassemble_obj(sections: &HashMap<usize, Section>, name: String, file_conten
                         && right_value.type_ == RelocationTypes::Constant
                     {
                         if let Some(value) = right_value.value {
-                            let name = format!(".L_{:08X}", value as usize);
+                            let name = format!(".L{:08X}", value as usize);
                             println!("generated {} {} {}", name, right_value.offset, value);
-                            jump_target_map.insert(value as usize, name);
+                            branch_target_destination_map.insert(value as usize, name);
                         }
                     }
                 }
@@ -299,20 +349,30 @@ fn disassemble_obj(sections: &HashMap<usize, Section>, name: String, file_conten
 
             println!("starting code section");
 
+            // need to get every non-reloc jump target to have labels. e.g.
+            // blez $a2, .L8001FBB8 compared to
+            // blez $a2, . + 4 + (0x25 << 2)
+
+            let mut branch_target_source_map: HashMap<usize, String> = HashMap::new();
+
+            generate_branch_targets(
+                file_contents,
+                cur_offset,
+                start_offset,
+                code,
+                &mut branch_target_source_map,
+                &mut branch_target_destination_map,
+            );
+
             while cur_offset < start_offset + code.len as usize {
                 let symbol_addr = &(cur_offset - start_offset);
-
-                match jump_target_map.get(symbol_addr) {
-                    Some(found_symbol) => {
-                        println!("got jump target {}", found_symbol);
-                        cur_func_string += format!("{}\n", found_symbol).as_str();
-                    }
-                    None => {}
-                }
 
                 match symbol_map.get(symbol_addr) {
                     Some(found_symbol) => {
                         println!("got symbol {}", found_symbol.name);
+
+                        cur_func_string +=
+                            format!(".size {}, . - {}\n", cur_func_name, cur_func_name).as_str();
 
                         if cur_func_string.len() > 0 {
                             let cur_func = Func {
@@ -321,11 +381,14 @@ fn disassemble_obj(sections: &HashMap<usize, Section>, name: String, file_conten
                             };
 
                             // emit the previous func
-                            funcs.push(cur_func);
+                            cur_obj.funcs.push(cur_func);
                         }
 
                         cur_func_string = "".to_string();
 
+                        cur_func_string += ".set noat      /* allow manual use of $at */\n";
+                        cur_func_string +=
+                            ".set noreorder /* don't insert nops after branches */\n\n";
                         cur_func_string += format!("glabel {}\n", found_symbol.name).as_str();
 
                         cur_func_name = found_symbol.name.clone();
@@ -339,26 +402,95 @@ fn disassemble_obj(sections: &HashMap<usize, Section>, name: String, file_conten
                 // why off by 4?
                 match find_reloc(section, (cur_offset - start_offset) - 4, instr) {
                     Some(reloc) => {
-                        let imm_override: Option<&str> = Some(&reloc);
-                        let thing = instruction.disassemble(imm_override, 0);
-                        cur_func_string +=
-                            format!("/* {:08X} {:08X} */ {}\n", cur_offset, instr, thing).as_str();
+                        if instruction.can_be_hi() {
+                            let thing =
+                                instruction.disassemble(Some(&format!("%hi({})", reloc)), 0);
+                            cur_func_string +=
+                                format!("/* {:08X} {:08X} */ {}\n", cur_offset, instr, thing)
+                                    .as_str();
+                        } else if instruction.can_be_lo() {
+                            let thing =
+                                instruction.disassemble(Some(&format!("%lo({})", reloc)), 0);
+                            cur_func_string +=
+                                format!("/* {:08X} {:08X} */ {}\n", cur_offset, instr, thing)
+                                    .as_str();
+                        } else {
+                            let imm_override: Option<&str> = Some(&reloc);
+                            let thing = instruction.disassemble(imm_override, 0);
+
+                            // check if this is also a target first and emit the label
+                            match branch_target_destination_map.get(symbol_addr) {
+                                Some(found_target_symbol) => {
+                                    let thing = instruction.disassemble(None, 0);
+                                    cur_func_string +=
+                                        format!("{}:\n", found_target_symbol).as_str();
+                                }
+                                None => {}
+                            }
+
+                            cur_func_string +=
+                                format!("/* {:08X} {:08X} */ {}\n", cur_offset, instr, thing)
+                                    .as_str();
+                        }
                     }
                     None => {
-                        let thing = instruction.disassemble(None, 0);
-                        cur_func_string +=
-                            format!("/* {:08X} {:08X} */ {}\n", cur_offset, instr, thing).as_str();
+                        // check for non-reloc branch sources / targets
+                        match branch_target_source_map.get(symbol_addr) {
+                            Some(found_source_symbol) => {
+                                // check if this is also a target first and emit the label
+                                match branch_target_destination_map.get(symbol_addr) {
+                                    Some(found_target_symbol) => {
+                                        let thing = instruction.disassemble(None, 0);
+                                        cur_func_string +=
+                                            format!("{}:\n", found_target_symbol).as_str();
+                                    }
+                                    None => {}
+                                }
+
+                                let imm_override: Option<&str> = Some(&found_source_symbol);
+                                let thing = instruction.disassemble(imm_override, 0);
+                                cur_func_string +=
+                                    format!("/* {:08X} {:08X} */ {}\n", cur_offset, instr, thing)
+                                        .as_str();
+                            }
+                            None => {
+                                match branch_target_destination_map.get(symbol_addr) {
+                                    Some(found_target_symbol) => {
+                                        let thing = instruction.disassemble(None, 0);
+                                        cur_func_string +=
+                                            format!("{}:\n", found_target_symbol).as_str();
+                                        cur_func_string += format!(
+                                            "/* {:08X} {:08X} */ {}\n",
+                                            cur_offset, instr, thing
+                                        )
+                                        .as_str();
+                                    }
+                                    None => {
+                                        // vanilla instruction
+                                        let thing = instruction.disassemble(None, 0);
+                                        cur_func_string += format!(
+                                            "/* {:08X} {:08X} */ {}\n",
+                                            cur_offset, instr, thing
+                                        )
+                                        .as_str();
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
 
             if cur_func_string.len() > 0 {
+                cur_func_string +=
+                    format!(".size {}, . - {}\n", cur_func_name, cur_func_name).as_str();
+
                 let cur_func = Func {
                     name: cur_func_name.clone(),
                     code: cur_func_string.clone(),
                 };
 
-                funcs.push(cur_func);
+                cur_obj.funcs.push(cur_func);
             }
         }
 
@@ -366,15 +498,23 @@ fn disassemble_obj(sections: &HashMap<usize, Section>, name: String, file_conten
         fs::create_dir_all(output_dir).unwrap();
 
         // Iterate over each Func and write to a file
-        for func in &funcs {
+        for func in &cur_obj.funcs {
             let filename = format!("{}/{}/{}.s", output_path, name, func.name);
             let mut file = fs::File::create(filename).unwrap();
             file.write_all(func.code.as_bytes()).unwrap();
         }
     }
+
+    objs.push(cur_obj);
 }
 
-fn parse_obj(file_contents: &Vec<u8>, offset: usize, name: String, output_path: &String) -> usize {
+fn parse_obj(
+    file_contents: &Vec<u8>,
+    offset: usize,
+    name: String,
+    output_path: &str,
+    objs: &mut Vec<Obj>,
+) -> usize {
     let magic_offset: usize = offset as usize + 0;
     let magic: u32 = get32(&file_contents, magic_offset);
     let mut end_offset: usize = 0;
@@ -655,7 +795,7 @@ fn parse_obj(file_contents: &Vec<u8>, offset: usize, name: String, output_path: 
             end_offset = cur_offset;
         }
 
-        disassemble_obj(&sections, name, file_contents, &output_path);
+        disassemble_obj(&sections, name, file_contents, &output_path, objs);
     } else {
         println!("not an obj  {:08X} \n", magic);
     }
@@ -665,18 +805,14 @@ fn parse_obj(file_contents: &Vec<u8>, offset: usize, name: String, output_path: 
 
 use std::env;
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
-
-    if args.len() < 3 {
-        eprintln!("Usage: {} <input_path> <output_path>", args[0]);
-        std::process::exit(1);
-    }
-
-    let input_path = &args[1];
-    let output_path = &args[2];
-
+fn parse_lib(
+    input_path: &str,
+    output_path: &str,
+    objs: &mut Vec<Obj>,
+    target_obj_name: &Option<String>,
+) {
     let mut current_pos = 0;
+
     match read_file_to_vec(input_path) {
         Ok(file_contents) => {
             let thing = get32(&file_contents, 0);
@@ -715,12 +851,25 @@ fn main() {
 
                             let lowercase_name = string.to_lowercase();
 
-                            parse_obj(
-                                &file_contents,
-                                offset as usize + base_addr as usize,
-                                lowercase_name,
-                                output_path
-                            );
+                            if let Some(obj_name) = target_obj_name {
+                                if (string.trim() == obj_name) {
+                                    parse_obj(
+                                        &file_contents,
+                                        offset as usize + base_addr as usize,
+                                        lowercase_name,
+                                        output_path,
+                                        objs,
+                                    );
+                                }
+                            } else {
+                                parse_obj(
+                                    &file_contents,
+                                    offset as usize + base_addr as usize,
+                                    lowercase_name,
+                                    output_path,
+                                    objs,
+                                );
+                            }
                             base_addr += size as usize;
                             current_pos = base_addr;
                         }
@@ -736,5 +885,130 @@ fn main() {
             println!("Error: {:?} {}", error, input_path);
             std::process::exit(1);
         }
+    }
+}
+
+fn main() {
+    let args: Vec<String> = env::args().collect();
+
+    if args.len() < 3 {
+        eprintln!("Usage: {} <input_path> <output_path>", args[0]);
+        std::process::exit(1);
+    }
+
+    let input_path = &args[1];
+    let output_path = &args[2];
+
+    let mut objs: Vec<Obj> = Vec::new();
+
+    parse_lib(input_path, output_path, &mut objs, &None);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    use similar::{ChangeTag, TextDiff};
+
+    fn print_diff(expected_lines: String, actual_lines: String) {
+        let diff = TextDiff::from_lines(&expected_lines, &actual_lines);
+
+        for diff in diff.iter_all_changes() {
+            match diff.tag() {
+                ChangeTag::Delete => print!("\x1b[31m{}\x1b[0m", diff),
+                ChangeTag::Insert => print!("\x1b[32m{}\x1b[0m", diff),
+                ChangeTag::Equal => print!("{}", diff),
+            }
+        }
+        println!();
+    }
+
+    use regex::Regex;
+
+    fn trim_comments(input: &str) -> String {
+        // replace comments
+        let comment_regex = Regex::new(r"/\*.*?\*/").unwrap();
+        let result_1 = comment_regex.replace_all(input, "");
+
+        // replace spaces
+        let whitespace_pattern = Regex::new(r" +").unwrap();
+        let result_2 = whitespace_pattern.replace_all(&result_1, " ");
+
+        // remove addresses from jumps
+        let pattern = Regex::new(r"\.L[0-9a-fA-F]{8}").unwrap();
+        let replacement = ".L";
+        let result_3 = pattern.replace_all(&result_2, replacement);
+
+        result_3.to_string()
+    }
+
+    fn check_func(objs: &Vec<Obj>, expected: &str, name: &str) {
+        for obj in objs {
+            for func in &obj.funcs {
+                if func.name == name {
+                    let expected_trimmed = trim_comments(&expected);
+                    let actual_trimmed = trim_comments(&func.code);
+
+                    let expected_clone = expected_trimmed.clone();
+                    let actual_clone = actual_trimmed.clone();
+
+                    print_diff(expected_trimmed, actual_trimmed);
+
+                    let expected_lines: Vec<&str> = expected_clone.lines().collect();
+                    let actual_lines: Vec<&str> = actual_clone.lines().collect();
+
+                    let max_len1 = expected_lines
+                        .iter()
+                        .map(|line| line.len())
+                        .max()
+                        .unwrap_or(0);
+
+                    // Iterate through the lines and print them side by side
+                    for (line1, line2) in expected_lines.iter().zip(actual_lines.iter()) {
+                        if (line1 != line2) {
+                            let spacing = max_len1.saturating_sub(line1.len());
+                            println!("{}{}{}", line1, " ".repeat(spacing), line2);
+                            assert_eq!(line1, line2);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn compare_asm(file_path: &str, name: &str, obj_name: &Option<String>) {
+        let input_path = "../psy-q/PSX/LIB/LIBSND.LIB";
+        let output_path = "../output_directory";
+        let mut objs: Vec<Obj> = Vec::new();
+
+        parse_lib(input_path, output_path, &mut objs, obj_name);
+
+        match fs::read_to_string(file_path) {
+            Ok(contents) => {
+                check_func(&objs, &contents, name);
+            }
+            Err(e) => {
+                eprintln!("Error reading file: {}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_SsUtResolveADSR() {
+        compare_asm(
+            "test_data/_SsUtResolveADSR.s",
+            "_SsUtResolveADSR",
+            &Some("ADSR".to_string()),
+        );
+    }
+
+    #[test]
+    fn test_SsSndCrescendo() {
+        compare_asm(
+            "test_data/_SsSndCrescendo.s",
+            "_SsSndCrescendo",
+            &Some("CRES".to_string()),
+        );
     }
 }
