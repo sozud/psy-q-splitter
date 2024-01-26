@@ -169,11 +169,17 @@ fn read_expression_recursive(
 struct Section {
     symbols: Vec<Symbol>,
     name: String,
-    bytes: Vec<CodeSection>,
+    bytes: Vec<u8>,
     relocations: Vec<Relocation>,
+    zeroes: usize,
 }
 
-fn find_reloc(section: &Section, cur_offset: usize, instr: u32) -> Option<String> {
+fn find_reloc(
+    section: &Section,
+    cur_offset: usize,
+    instr: u32,
+    sections: &HashMap<usize, Section>,
+) -> Option<String> {
     let mut symbols_map: HashMap<u32, Symbol> = HashMap::new();
     let mut relocs_map: HashMap<usize, Relocation> = HashMap::new();
     for relocation in &section.relocations {
@@ -209,14 +215,101 @@ fn find_reloc(section: &Section, cur_offset: usize, instr: u32) -> Option<String
                 if left_value.type_ == RelocationTypes::SectionBase
                     && right_value.type_ == RelocationTypes::Constant
                 {
-                    if let Some(value) = right_value.value {
-                        let name = format!(".L{:08X}", value);
-                        // probably ought to look up section?
+                    if let Some(section_idx) = left_value.section_idx {
+                        if let Some(section_base_section) = sections.get(&(section_idx as usize)) {
+                            if let Some(value) = right_value.value {
+                                if (section_base_section.name == ".data") {
+                                    // value is offset into data section
+                                    let name = format!("D_{:08X}", value);
 
-                        if right_value.offset == cur_offset {
-                            return Some(name);
+                                    if right_value.offset == cur_offset {
+                                        return Some(name);
+                                    }
+                                } else if (section_base_section.name == ".text") {
+                                    let name = format!(".L{:08X}", value);
+
+                                    if right_value.offset == cur_offset {
+                                        return Some(name);
+                                    }
+                                } else if (section_base_section.name == ".bss") {
+                                    // value is offset into bss section
+                                    let name = format!("B_{:08X}", value);
+
+                                    if right_value.offset == cur_offset {
+                                        return Some(name);
+                                    }
+                                } else {
+                                    println!(
+                                        "missing reloc handling {}",
+                                        section_base_section.name
+                                    );
+                                    std::process::exit(1);
+                                }
+                            }
                         }
                     }
+                } else if left_value.type_ == RelocationTypes::Constant
+                    && right_value.type_ == RelocationTypes::AddressOfSymbol
+                {
+                    // struct accesses work like this
+                    if let Some(value) = left_value.value {
+                        if let Some(idx) = right_value.symbol_idx {
+                            if let Some(symbol) = symbols_map.get(&idx) {
+                                let name = format!("{}+{}", symbol.name, value);
+
+                                // either one has same offset
+                                if right_value.offset == cur_offset {
+                                    return Some(name);
+                                }
+                            }
+                        }
+                    }
+                } else if left_value.type_ == RelocationTypes::Constant
+                    && right_value.type_ == RelocationTypes::Add
+                {
+                    // Constant + (SectionBase + Constant)
+                    if let (Some(right_left), Some(right_right)) =
+                        (right_value.left.clone(), right_value.right.clone())
+                    {
+                        if (right_left.type_ == RelocationTypes::SectionBase
+                            && right_right.type_ == RelocationTypes::Constant)
+                        {
+                            if let Some(right_left_section_idx) = right_left.section_idx {
+                                if let Some(section_base_section) =
+                                    sections.get(&(right_left_section_idx as usize))
+                                {
+                                    if let Some(right_right_value) = right_right.value {
+                                        if let Some(left_value_value) = left_value.value {
+                                            // all offsets seem to always be the same
+                                            let name = format!(
+                                                "{}+{}+{}",
+                                                section_base_section.name,
+                                                right_right_value,
+                                                left_value_value
+                                            );
+
+                                            if right_value.offset == cur_offset {
+                                                return None; // ignore these for now
+                                                             // return Some(name);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            println!("unimplemented compound add reloc");
+                            std::process::exit(1);
+                        }
+                    } else {
+                        println!("something wrong with compound add reloc");
+                        std::process::exit(1);
+                    }
+                } else {
+                    println!(
+                        "unhandled reloc {:?}:{:?} {:?}:{:?}\n",
+                        left_value.type_, left_value.value, right_value.type_, right_value.value
+                    );
+                    std::process::exit(1);
                 }
             }
         }
@@ -242,33 +335,246 @@ fn generate_branch_targets(
     file_contents: &Vec<u8>,
     cur_offset_: usize,
     start_offset: usize,
-    code: &CodeSection,
+    code: &Vec<u8>,
     branch_target_source_map: &mut HashMap<usize, String>,
     branch_target_destination_map: &mut HashMap<usize, String>,
 ) {
     let mut cur_offset = cur_offset_;
-    while cur_offset < start_offset + code.len as usize {
+    while cur_offset < start_offset + code.len() as usize {
         let symbol_addr = &(cur_offset - start_offset);
         let instr: u32 = get32(&file_contents, cur_offset);
         cur_offset += 4;
         let instruction = Instruction::new(instr, 0, InstrCategory::CPU);
         let thing = instruction.disassemble(None, 0);
         if instruction.is_branch() {
-            let target_label = format!(
-                ".L{:08X}",
-                symbol_addr + instruction.branch_offset() as usize
-            );
             println!(
-                "branch_offset {} {} {}",
+                "symbol_addr {} instruction.branch_offset() {}",
+                symbol_addr,
+                instruction.branch_offset()
+            );
+            let addr = *symbol_addr as i32 + instruction.branch_offset();
+            let target_label = format!(".L{:08X}", addr);
+            println!(
+                "branch_offset {} {} {} {}",
                 thing.to_string(),
                 instruction.branch_offset(),
-                target_label
+                target_label,
+                addr
             );
-            branch_target_destination_map.insert(
-                symbol_addr + instruction.branch_offset() as usize,
-                target_label.clone(),
-            );
+
+            assert!(addr != 0);
+            assert!(*symbol_addr != 0);
+            branch_target_destination_map.insert(addr as usize, target_label.clone());
             branch_target_source_map.insert(*symbol_addr, target_label);
+        }
+    }
+}
+
+fn do_code_section(
+    cur_obj: &mut Obj,
+    section: &Section,
+    symbol_map: &HashMap<usize, Symbol>,
+    sections: &HashMap<usize, Section>,
+) {
+    let mut branch_target_destination_map: HashMap<usize, String> = HashMap::new();
+
+    // relocs and branch targets need to have the same destination map
+    // or we get L_XXXXXX twice in output
+
+    // generate jump target relocs
+    for relocation in &section.relocations {
+        if relocation.type_ == RelocationTypes::Add {
+            if let (Some(left_value), Some(right_value)) =
+                (relocation.left.clone(), relocation.right.clone())
+            {
+                if left_value.type_ == RelocationTypes::SectionBase
+                    && right_value.type_ == RelocationTypes::Constant
+                {
+                    if let Some(section_idx) = left_value.section_idx {
+                        if let Some(section_base_section) = sections.get(&(section_idx as usize)) {
+                            if section_base_section.name == ".text" {
+                                if let Some(value) = right_value.value {
+                                    let name = format!(".L{:08X}", value as usize);
+                                    println!("generated {} {} {}", name, right_value.offset, value);
+
+                                    // some sort of bug todo
+                                    if (value != 0) {
+                                        branch_target_destination_map.insert(value as usize, name);
+                                    } else {
+                                        println!("branch target was 0");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let code = &section.bytes;
+    {
+        let start_offset = 0;
+        let mut cur_offset = start_offset;
+        let mut cur_func_string = "".to_string();
+        let mut func_base = 0;
+
+        let mut cur_func_name = "".to_string();
+
+        println!("starting code section len {}", code.len());
+
+        // need to get every non-reloc jump target to have labels. e.g.
+        // blez $a2, .L8001FBB8 compared to
+        // blez $a2, . + 4 + (0x25 << 2)
+
+        let mut branch_target_source_map: HashMap<usize, String> = HashMap::new();
+
+        generate_branch_targets(
+            code,
+            cur_offset,
+            start_offset,
+            code,
+            &mut branch_target_source_map,
+            &mut branch_target_destination_map,
+        );
+
+        while cur_offset < start_offset + code.len() as usize {
+            let symbol_addr = &(cur_offset - start_offset);
+
+            match symbol_map.get(symbol_addr) {
+                Some(found_symbol) => {
+                    println!("got symbol {}", found_symbol.name);
+
+                    cur_func_string +=
+                        format!(".size {}, . - {}\n", cur_func_name, cur_func_name).as_str();
+
+                    if cur_func_string.len() > 0 {
+                        let cur_func = Func {
+                            name: cur_func_name.clone(),
+                            code: cur_func_string.clone(),
+                        };
+
+                        // emit the previous func
+                        cur_obj.funcs.push(cur_func);
+                    }
+
+                    cur_func_string = "".to_string();
+
+                    cur_func_string += ".set noat      /* allow manual use of $at */\n";
+                    cur_func_string += ".set noreorder /* don't insert nops after branches */\n\n";
+                    cur_func_string += format!("glabel {}\n", found_symbol.name).as_str();
+
+                    cur_func_name = found_symbol.name.clone();
+                }
+                None => {}
+            }
+            let instr: u32 = get32(&code, cur_offset);
+            cur_offset += 4;
+            let instruction = Instruction::new(instr, 0, InstrCategory::CPU);
+
+            // why off by 4?
+            match find_reloc(section, (cur_offset - start_offset) - 4, instr, &sections) {
+                Some(reloc) => {
+                    if instruction.can_be_hi() {
+                        let thing = instruction.disassemble(Some(&format!("%hi({})", reloc)), 0);
+                        // check if this is also a target first and emit the label
+                        match branch_target_destination_map.get(symbol_addr) {
+                            Some(found_target_symbol) => {
+                                let thing = instruction.disassemble(None, 0);
+                                cur_func_string += format!("{}:\n", found_target_symbol).as_str();
+                            }
+                            None => {}
+                        }
+                        cur_func_string +=
+                            format!("/* {:08X} {:08X} */ {}\n", cur_offset, instr, thing).as_str();
+                    } else if instruction.can_be_lo() {
+                        let thing = instruction.disassemble(Some(&format!("%lo({})", reloc)), 0);
+                        // check if this is also a target first and emit the label
+                        match branch_target_destination_map.get(symbol_addr) {
+                            Some(found_target_symbol) => {
+                                let thing = instruction.disassemble(None, 0);
+                                cur_func_string += format!("{}:\n", found_target_symbol).as_str();
+                            }
+                            None => {}
+                        }
+                        cur_func_string +=
+                            format!("/* {:08X} {:08X} */ {}\n", cur_offset, instr, thing).as_str();
+                    } else {
+                        let imm_override: Option<&str> = Some(&reloc);
+                        let thing = instruction.disassemble(imm_override, 0);
+
+                        // check if this is also a target first and emit the label
+                        match branch_target_destination_map.get(symbol_addr) {
+                            Some(found_target_symbol) => {
+                                let thing = instruction.disassemble(None, 0);
+                                cur_func_string += format!("{}:\n", found_target_symbol).as_str();
+                            }
+                            None => {}
+                        }
+
+                        cur_func_string +=
+                            format!("/* {:08X} {:08X} */ {}\n", cur_offset, instr, thing).as_str();
+                    }
+                }
+                None => {
+                    // check for non-reloc branch sources / targets
+                    match branch_target_source_map.get(symbol_addr) {
+                        Some(found_source_symbol) => {
+                            // check if this is also a target first and emit the label
+                            match branch_target_destination_map.get(symbol_addr) {
+                                Some(found_target_symbol) => {
+                                    let thing = instruction.disassemble(None, 0);
+                                    cur_func_string +=
+                                        format!("{}:\n", found_target_symbol).as_str();
+                                }
+                                None => {}
+                            }
+
+                            let imm_override: Option<&str> = Some(&found_source_symbol);
+                            let thing = instruction.disassemble(imm_override, 0);
+                            cur_func_string +=
+                                format!("/* {:08X} {:08X} */ {}\n", cur_offset, instr, thing)
+                                    .as_str();
+                        }
+                        None => {
+                            match branch_target_destination_map.get(symbol_addr) {
+                                Some(found_target_symbol) => {
+                                    let thing = instruction.disassemble(None, 0);
+                                    cur_func_string +=
+                                        format!("{}:\n", found_target_symbol).as_str();
+                                    cur_func_string += format!(
+                                        "/* {:08X} {:08X} */ {}\n",
+                                        cur_offset, instr, thing
+                                    )
+                                    .as_str();
+                                }
+                                None => {
+                                    // vanilla instruction
+                                    let thing = instruction.disassemble(None, 0);
+                                    cur_func_string += format!(
+                                        "/* {:08X} {:08X} */ {}\n",
+                                        cur_offset, instr, thing
+                                    )
+                                    .as_str();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if cur_func_string.len() > 0 {
+            cur_func_string += format!(".size {}, . - {}\n", cur_func_name, cur_func_name).as_str();
+
+            let cur_func = Func {
+                name: cur_func_name.clone(),
+                code: cur_func_string.clone(),
+            };
+
+            println!("pushing {}", cur_func_name);
+
+            cur_obj.funcs.push(cur_func);
         }
     }
 }
@@ -315,183 +621,8 @@ fn disassemble_obj(
             println!("symbol name {}", symbol.name);
         }
 
-        let mut branch_target_destination_map: HashMap<usize, String> = HashMap::new();
-
-        // relocs and branch targets need to have the same destination map
-        // or we get L_XXXXXX twice in output
-
-        // generate jump target relocs
-        for relocation in &section.relocations {
-            if relocation.type_ == RelocationTypes::Add {
-                if let (Some(left_value), Some(right_value)) =
-                    (relocation.left.clone(), relocation.right.clone())
-                {
-                    if left_value.type_ == RelocationTypes::SectionBase
-                        && right_value.type_ == RelocationTypes::Constant
-                    {
-                        if let Some(value) = right_value.value {
-                            let name = format!(".L{:08X}", value as usize);
-                            println!("generated {} {} {}", name, right_value.offset, value);
-                            branch_target_destination_map.insert(value as usize, name);
-                        }
-                    }
-                }
-            }
-        }
-
-        for code in &section.bytes {
-            let start_offset = code.start_offset;
-            let mut cur_offset = start_offset;
-            let mut cur_func_string = "".to_string();
-            let mut func_base = 0;
-
-            let mut cur_func_name = "".to_string();
-
-            println!("starting code section");
-
-            // need to get every non-reloc jump target to have labels. e.g.
-            // blez $a2, .L8001FBB8 compared to
-            // blez $a2, . + 4 + (0x25 << 2)
-
-            let mut branch_target_source_map: HashMap<usize, String> = HashMap::new();
-
-            generate_branch_targets(
-                file_contents,
-                cur_offset,
-                start_offset,
-                code,
-                &mut branch_target_source_map,
-                &mut branch_target_destination_map,
-            );
-
-            while cur_offset < start_offset + code.len as usize {
-                let symbol_addr = &(cur_offset - start_offset);
-
-                match symbol_map.get(symbol_addr) {
-                    Some(found_symbol) => {
-                        println!("got symbol {}", found_symbol.name);
-
-                        cur_func_string +=
-                            format!(".size {}, . - {}\n", cur_func_name, cur_func_name).as_str();
-
-                        if cur_func_string.len() > 0 {
-                            let cur_func = Func {
-                                name: cur_func_name.clone(),
-                                code: cur_func_string.clone(),
-                            };
-
-                            // emit the previous func
-                            cur_obj.funcs.push(cur_func);
-                        }
-
-                        cur_func_string = "".to_string();
-
-                        cur_func_string += ".set noat      /* allow manual use of $at */\n";
-                        cur_func_string +=
-                            ".set noreorder /* don't insert nops after branches */\n\n";
-                        cur_func_string += format!("glabel {}\n", found_symbol.name).as_str();
-
-                        cur_func_name = found_symbol.name.clone();
-                    }
-                    None => {}
-                }
-                let instr: u32 = get32(&file_contents, cur_offset);
-                cur_offset += 4;
-                let instruction = Instruction::new(instr, 0, InstrCategory::CPU);
-
-                // why off by 4?
-                match find_reloc(section, (cur_offset - start_offset) - 4, instr) {
-                    Some(reloc) => {
-                        if instruction.can_be_hi() {
-                            let thing =
-                                instruction.disassemble(Some(&format!("%hi({})", reloc)), 0);
-                            cur_func_string +=
-                                format!("/* {:08X} {:08X} */ {}\n", cur_offset, instr, thing)
-                                    .as_str();
-                        } else if instruction.can_be_lo() {
-                            let thing =
-                                instruction.disassemble(Some(&format!("%lo({})", reloc)), 0);
-                            cur_func_string +=
-                                format!("/* {:08X} {:08X} */ {}\n", cur_offset, instr, thing)
-                                    .as_str();
-                        } else {
-                            let imm_override: Option<&str> = Some(&reloc);
-                            let thing = instruction.disassemble(imm_override, 0);
-
-                            // check if this is also a target first and emit the label
-                            match branch_target_destination_map.get(symbol_addr) {
-                                Some(found_target_symbol) => {
-                                    let thing = instruction.disassemble(None, 0);
-                                    cur_func_string +=
-                                        format!("{}:\n", found_target_symbol).as_str();
-                                }
-                                None => {}
-                            }
-
-                            cur_func_string +=
-                                format!("/* {:08X} {:08X} */ {}\n", cur_offset, instr, thing)
-                                    .as_str();
-                        }
-                    }
-                    None => {
-                        // check for non-reloc branch sources / targets
-                        match branch_target_source_map.get(symbol_addr) {
-                            Some(found_source_symbol) => {
-                                // check if this is also a target first and emit the label
-                                match branch_target_destination_map.get(symbol_addr) {
-                                    Some(found_target_symbol) => {
-                                        let thing = instruction.disassemble(None, 0);
-                                        cur_func_string +=
-                                            format!("{}:\n", found_target_symbol).as_str();
-                                    }
-                                    None => {}
-                                }
-
-                                let imm_override: Option<&str> = Some(&found_source_symbol);
-                                let thing = instruction.disassemble(imm_override, 0);
-                                cur_func_string +=
-                                    format!("/* {:08X} {:08X} */ {}\n", cur_offset, instr, thing)
-                                        .as_str();
-                            }
-                            None => {
-                                match branch_target_destination_map.get(symbol_addr) {
-                                    Some(found_target_symbol) => {
-                                        let thing = instruction.disassemble(None, 0);
-                                        cur_func_string +=
-                                            format!("{}:\n", found_target_symbol).as_str();
-                                        cur_func_string += format!(
-                                            "/* {:08X} {:08X} */ {}\n",
-                                            cur_offset, instr, thing
-                                        )
-                                        .as_str();
-                                    }
-                                    None => {
-                                        // vanilla instruction
-                                        let thing = instruction.disassemble(None, 0);
-                                        cur_func_string += format!(
-                                            "/* {:08X} {:08X} */ {}\n",
-                                            cur_offset, instr, thing
-                                        )
-                                        .as_str();
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if cur_func_string.len() > 0 {
-                cur_func_string +=
-                    format!(".size {}, . - {}\n", cur_func_name, cur_func_name).as_str();
-
-                let cur_func = Func {
-                    name: cur_func_name.clone(),
-                    code: cur_func_string.clone(),
-                };
-
-                cur_obj.funcs.push(cur_func);
-            }
+        if section.name == ".text" {
+            do_code_section(&mut cur_obj, section, &symbol_map, sections);
         }
 
         let output_dir = format!("{}/{}", output_path, name).to_string();
@@ -499,9 +630,11 @@ fn disassemble_obj(
 
         // Iterate over each Func and write to a file
         for func in &cur_obj.funcs {
-            let filename = format!("{}/{}/{}.s", output_path, name, func.name);
-            let mut file = fs::File::create(filename).unwrap();
-            file.write_all(func.code.as_bytes()).unwrap();
+            if func.name != "" {
+                let filename = format!("{}/{}/{}.s", output_path, name, func.name);
+                let mut file = fs::File::create(filename).unwrap();
+                file.write_all(func.code.as_bytes()).unwrap();
+            }
         }
     }
 
@@ -542,13 +675,26 @@ fn parse_obj(
                     cur_offset += 2;
                     println!("code size {}", len);
 
-                    let code_section: CodeSection = CodeSection {
-                        len: len,
-                        start_offset: cur_offset,
-                    };
-
                     if let Some(section) = sections.get_mut(&(cur_section_id as usize)) {
-                        section.bytes.push(code_section);
+                        println!(
+                            "code section cur_offset {} len {} file_contents len  {}",
+                            cur_offset,
+                            len,
+                            file_contents.len()
+                        );
+                        if section.zeroes > 0 {
+                            println!(
+                                "extending section {} with {} 0s",
+                                section.name, section.zeroes
+                            );
+                            section
+                                .bytes
+                                .extend(std::iter::repeat(0).take(section.zeroes));
+                            section.zeroes = 0;
+                        }
+                        section.bytes.extend_from_slice(
+                            &file_contents[cur_offset..cur_offset + len as usize],
+                        );
                     } else {
                         println!("missing section");
                         std::process::exit(0);
@@ -566,6 +712,12 @@ fn parse_obj(
                     //	Uninitialised data
                     let size = get32(&file_contents, cur_offset);
                     cur_offset += 4;
+                    if let Some(section) = sections.get_mut(&(cur_section_id as usize)) {
+                        section.zeroes += size as usize;
+                    } else {
+                        println!("missing section");
+                        std::process::exit(0);
+                    }
                 }
                 10 => {
                     let type_ = get8(&file_contents, cur_offset);
@@ -687,6 +839,7 @@ fn parse_obj(
                                     name: string,
                                     bytes: Vec::new(),
                                     relocations: Vec::new(),
+                                    zeroes: 0,
                                 };
                                 sections.insert(section_id as usize, new_section);
                             }
@@ -710,7 +863,7 @@ fn parse_obj(
 
                             if let Some(section) = sections.get_mut(&(section_id as usize)) {
                                 let new_struct = Symbol {
-                                    number: None, // fixme
+                                    number: None,
                                     section: section_id,
                                     offset: Some(offset),
                                     len: len,
@@ -1009,6 +1162,33 @@ mod tests {
             "test_data/_SsSndCrescendo.s",
             "_SsSndCrescendo",
             &Some("CRES".to_string()),
+        );
+    }
+
+    // #[test]
+    // fn testSpuVmAlloc() {
+    //     compare_asm(
+    //         "test_data/SpuVmAlloc.s",
+    //         "SpuVmAlloc",
+    //         &Some("VMANAGER".to_string()),
+    //     );
+    // }
+
+    #[test]
+    fn testSpuVmVSetUp() {
+        compare_asm(
+            "test_data/SpuVmVSetUp.s",
+            "SpuVmVSetUp",
+            &Some("VM_VSU".to_string()),
+        );
+    }
+
+    #[test]
+    fn testSsVabTransBodyPartly() {
+        compare_asm(
+            "test_data/SsVabTransBodyPartly.s",
+            "SsVabTransBodyPartly",
+            &Some("VS_VTBP".to_string()),
         );
     }
 }
