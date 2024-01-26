@@ -208,8 +208,7 @@ fn find_reloc(
 
     // generate add stuff.
     for relocation in &section.relocations {
-        if !relocation.offset == cur_offset
-        {
+        if !relocation.offset == cur_offset {
             continue;
         }
         if relocation.type_ == RelocationTypes::Add {
@@ -236,6 +235,17 @@ fn find_reloc(
                                         return Some(name);
                                     }
                                 } else if (section_base_section.name == ".bss") {
+                                    // look for a bss symbol with this offset
+                                    for s in &section_base_section.symbols {
+                                        if let Some(the_offset) = s.offset {
+                                            if value == the_offset {
+                                                if right_value.offset == cur_offset {
+                                                    return Some(s.name.clone());
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     // value is offset into bss section
                                     let name = format!("B_{:08X}", value);
 
@@ -249,8 +259,7 @@ fn find_reloc(
                                     if right_value.offset == cur_offset {
                                         return Some(name);
                                     }
-                                }
-                                else {
+                                } else {
                                     println!(
                                         "missing reloc handling {}",
                                         section_base_section.name
@@ -296,14 +305,19 @@ fn find_reloc(
 
                                             assert!(section_base_section.name == ".bss");
 
-                                            let name = format!(
-                                                "B_{:08X}+{}",
-                                                right_right_value,
-                                                left_value_value
-                                            );
+                                            for s in &section_base_section.symbols {
+                                                if let Some(the_offset) = s.offset {
+                                                    if right_right_value == the_offset {
+                                                        let name = format!(
+                                                            "{}+{}",
+                                                            s.name, left_value_value
+                                                        );
 
-                                            if right_value.offset == cur_offset {
-                                                return Some(name);
+                                                        if right_value.offset == cur_offset {
+                                                            return Some(name);
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -875,7 +889,7 @@ fn parse_obj(
                     cur_offset += len as usize;
                     match String::from_utf8(name_vec) {
                         Ok(string) => {
-                            println!("local sym name {} len {}", string, len);
+                            println!("local sym name {} offset {} len {}", string, offset, len);
 
                             if let Some(section) = sections.get_mut(&(section_id as usize)) {
                                 let new_struct = Symbol {
