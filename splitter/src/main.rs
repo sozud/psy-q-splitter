@@ -667,6 +667,316 @@ fn disassemble_obj(
     objs.push(cur_obj);
 }
 
+fn parse_obj_inner(
+    file_contents: &Vec<u8>,
+    offset: usize,
+    name: String,
+    output_path: &str,
+    objs: &mut Vec<Obj>,
+    start_offset: usize,
+    end_offset: &mut usize,
+) {
+    let mut sections: HashMap<usize, Section> = HashMap::new();
+    let mut cur_section_id = 0;
+    let mut patch_offset = 0;
+
+    let mut functions: Vec<Function> = Vec::new();
+    let mut cur_offset = start_offset;
+    loop {
+        let chunk = get8(&file_contents, cur_offset);
+        cur_offset += 1;
+        println!("chunk {}", chunk);
+
+        match chunk {
+            0 => {
+                // end
+                break;
+            }
+            2 => {
+                // code section
+                let len: u32 = get16(&file_contents, cur_offset);
+                cur_offset += 2;
+                println!("code size {}", len);
+
+                if let Some(section) = sections.get_mut(&(cur_section_id as usize)) {
+                    println!(
+                        "code section cur_offset {} len {} file_contents len  {}",
+                        cur_offset,
+                        len,
+                        file_contents.len()
+                    );
+                    if section.zeroes > 0 {
+                        println!(
+                            "extending section {} with {} 0s",
+                            section.name, section.zeroes
+                        );
+                        section
+                            .bytes
+                            .extend(std::iter::repeat(0).take(section.zeroes));
+                        section.zeroes = 0;
+                    }
+                    section
+                        .bytes
+                        .extend_from_slice(&file_contents[cur_offset..cur_offset + len as usize]);
+                } else {
+                    println!("missing section");
+                    std::process::exit(0);
+                }
+
+                cur_offset += len as usize;
+            }
+            6 => {
+                // section switch
+                let id = get16(&file_contents, cur_offset);
+                cur_section_id = id;
+                cur_offset += 2;
+                if let Some(section) = sections.get_mut(&(cur_section_id as usize)) {
+                    patch_offset = section.bytes.len();
+                }
+            }
+            8 => {
+                //	Uninitialised data
+                let size = get32(&file_contents, cur_offset);
+                cur_offset += 4;
+                if let Some(section) = sections.get_mut(&(cur_section_id as usize)) {
+                    section.zeroes += size as usize;
+                } else {
+                    println!("missing section");
+                    std::process::exit(0);
+                }
+            }
+            10 => {
+                let type_ = get8(&file_contents, cur_offset);
+                cur_offset += 1;
+
+                let offset = get16(&file_contents, cur_offset);
+                cur_offset += 2;
+
+                if let Some(section) = sections.get_mut(&(cur_section_id as usize)) {
+                    let result = read_expression_recursive(
+                        &file_contents,
+                        &mut cur_offset,
+                        offset as usize + patch_offset,
+                        section,
+                    );
+                    if let Some(got_it) = result {
+                        section.relocations.push(got_it);
+                    }
+                } else {
+                    println!("missing section");
+                    std::process::exit(0);
+                }
+            }
+            12 => {
+                let number = get16(&file_contents, cur_offset);
+                cur_offset += 2;
+
+                let section_id = get16(&file_contents, cur_offset);
+                cur_offset += 2;
+
+                let offset = get32(&file_contents, cur_offset);
+                cur_offset += 4;
+
+                let len = get8(&file_contents, cur_offset);
+                cur_offset += 1;
+
+                let name_vec: Vec<u8> = getn(&file_contents, cur_offset, len as usize);
+                cur_offset += len as usize;
+                match String::from_utf8(name_vec) {
+                    Ok(string) => {
+                        println!("xdef name {} offset {}", string, offset);
+
+                        let new_struct = Symbol {
+                            number: Some(number),
+                            section: section_id,
+                            offset: Some(offset),
+                            len: len,
+                            name: string,
+                            size: None,
+                        };
+
+                        if let Some(section) = sections.get_mut(&(section_id as usize)) {
+                            section.symbols.push(new_struct);
+                        } else {
+                            println!("missing section");
+                            std::process::exit(0);
+                        }
+                    }
+                    Err(_) => todo!(),
+                }
+            }
+            14 => {
+                let number = get16(&file_contents, cur_offset);
+                cur_offset += 2;
+                let len = get8(&file_contents, cur_offset);
+                cur_offset += 1;
+
+                let name_vec: Vec<u8> = getn(&file_contents, cur_offset, len as usize);
+                cur_offset += len as usize;
+                match String::from_utf8(name_vec) {
+                    Ok(string) => {
+                        println!("xref name {} len {} number {}", string, len, number);
+
+                        let new_struct = Symbol {
+                            number: Some(number),
+                            section: cur_section_id,
+                            offset: None,
+                            len: len,
+                            name: string,
+                            size: None,
+                        };
+
+                        if let Some(section) = sections.get_mut(&(cur_section_id as usize)) {
+                            section.symbols.push(new_struct);
+                        } else {
+                            println!("missing section");
+                            std::process::exit(0);
+                        }
+                    }
+                    Err(_) => todo!(),
+                }
+            }
+            16 => {
+                // section
+                let section_id = get16(&file_contents, cur_offset);
+                cur_offset += 2;
+                let group: u32 = get8(&file_contents, cur_offset);
+                cur_offset += 1;
+                let align: u32 = get16(&file_contents, cur_offset);
+                cur_offset += 2;
+                let len = get8(&file_contents, cur_offset);
+                cur_offset += 1;
+
+                let name_vec: Vec<u8> = getn(&file_contents, cur_offset, len as usize);
+                cur_offset += len as usize;
+                match String::from_utf8(name_vec) {
+                    Ok(string) => {
+                        println!(
+                            "section name {} id {} group {} align {} len {}",
+                            string, section_id, group, align, len
+                        );
+
+                        if let Some(section) = sections.get_mut(&(section_id as usize)) {
+                            println!("section already exists");
+                            std::process::exit(1);
+                        } else {
+                            let new_section = Section {
+                                symbols: Vec::new(),
+                                name: string,
+                                bytes: Vec::new(),
+                                relocations: Vec::new(),
+                                zeroes: 0,
+                            };
+                            sections.insert(section_id as usize, new_section);
+                        }
+                    }
+                    Err(_) => todo!(),
+                }
+            }
+            18 => {
+                let section_id = get16(&file_contents, cur_offset);
+                cur_offset += 2;
+                let offset: u32 = get32(&file_contents, cur_offset);
+                cur_offset += 4;
+                let len = get8(&file_contents, cur_offset);
+                cur_offset += 1;
+
+                let name_vec: Vec<u8> = getn(&file_contents, cur_offset, len as usize);
+                cur_offset += len as usize;
+                match String::from_utf8(name_vec) {
+                    Ok(string) => {
+                        println!("local sym name {} offset {} len {}", string, offset, len);
+
+                        if let Some(section) = sections.get_mut(&(section_id as usize)) {
+                            let new_struct = Symbol {
+                                number: None,
+                                section: section_id,
+                                offset: Some(offset),
+                                len: len,
+                                name: string,
+                                size: None,
+                            };
+
+                            section.symbols.push(new_struct);
+                        } else {
+                            println!("section doesnt exist");
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(_) => todo!(),
+                }
+            }
+            28 => {
+                let number = get16(&file_contents, cur_offset);
+                cur_offset += 2;
+
+                let len = get8(&file_contents, cur_offset);
+                cur_offset += 1;
+
+                let name_vec: Vec<u8> = getn(&file_contents, cur_offset, len as usize);
+                cur_offset += len as usize;
+                match String::from_utf8(name_vec) {
+                    Ok(string) => {
+                        println!("file name {} number {}", string, number);
+                    }
+                    Err(_) => todo!(),
+                }
+            }
+            46 => {
+                let cpu = get8(&file_contents, cur_offset);
+                cur_offset += 1;
+                println!("cpu {}", cpu);
+            }
+            48 => {
+                // xbss
+                let number = get16(&file_contents, cur_offset);
+                cur_offset += 2;
+
+                let section_id = get16(&file_contents, cur_offset);
+                cur_offset += 2;
+
+                let size = get32(&file_contents, cur_offset);
+                cur_offset += 4;
+
+                let len = get8(&file_contents, cur_offset);
+                cur_offset += 1;
+
+                let name_vec: Vec<u8> = getn(&file_contents, cur_offset, len as usize);
+                cur_offset += len as usize;
+                match String::from_utf8(name_vec) {
+                    Ok(string) => {
+                        println!("xbss name {} number {}", string, number);
+
+                        if let Some(section) = sections.get_mut(&(section_id as usize)) {
+                            let new_struct = Symbol {
+                                number: Some(number),
+                                section: section_id,
+                                offset: None,
+                                size: Some(size),
+                                len: len,
+                                name: string,
+                            };
+
+                            section.symbols.push(new_struct);
+                        } else {
+                            println!("section doesnt exist");
+                            std::process::exit(1);
+                        }
+                    }
+                    Err(_) => todo!(),
+                }
+            }
+            _ => {
+                println!("unknown chunk {}", chunk);
+                std::process::exit(0);
+            }
+        }
+        *end_offset = cur_offset;
+    }
+
+    disassemble_obj(&sections, name, file_contents, &output_path, objs);
+}
+
 fn parse_obj(
     file_contents: &Vec<u8>,
     offset: usize,
@@ -677,308 +987,19 @@ fn parse_obj(
     let magic_offset: usize = offset as usize + 0;
     let magic: u32 = get32(&file_contents, magic_offset);
     let mut end_offset: usize = 0;
-    let mut sections: HashMap<usize, Section> = HashMap::new();
-    let mut cur_section_id = 0;
-    let mut patch_offset = 0;
 
     if magic == 0x024B4E4C
     //OBJ
     {
-        let mut functions: Vec<Function> = Vec::new();
-        let mut cur_offset = magic_offset + 4;
-        loop {
-            let chunk = get8(&file_contents, cur_offset);
-            cur_offset += 1;
-            println!("chunk {}", chunk);
-
-            match chunk {
-                0 => {
-                    // end
-                    break;
-                }
-                2 => {
-                    // code section
-                    let len: u32 = get16(&file_contents, cur_offset);
-                    cur_offset += 2;
-                    println!("code size {}", len);
-
-                    if let Some(section) = sections.get_mut(&(cur_section_id as usize)) {
-                        println!(
-                            "code section cur_offset {} len {} file_contents len  {}",
-                            cur_offset,
-                            len,
-                            file_contents.len()
-                        );
-                        if section.zeroes > 0 {
-                            println!(
-                                "extending section {} with {} 0s",
-                                section.name, section.zeroes
-                            );
-                            section
-                                .bytes
-                                .extend(std::iter::repeat(0).take(section.zeroes));
-                            section.zeroes = 0;
-                        }
-                        section.bytes.extend_from_slice(
-                            &file_contents[cur_offset..cur_offset + len as usize],
-                        );
-                    } else {
-                        println!("missing section");
-                        std::process::exit(0);
-                    }
-
-                    cur_offset += len as usize;
-                }
-                6 => {
-                    // section switch
-                    let id = get16(&file_contents, cur_offset);
-                    cur_section_id = id;
-                    cur_offset += 2;
-                    if let Some(section) = sections.get_mut(&(cur_section_id as usize)) {
-                        patch_offset = section.bytes.len();
-                    }
-                }
-                8 => {
-                    //	Uninitialised data
-                    let size = get32(&file_contents, cur_offset);
-                    cur_offset += 4;
-                    if let Some(section) = sections.get_mut(&(cur_section_id as usize)) {
-                        section.zeroes += size as usize;
-                    } else {
-                        println!("missing section");
-                        std::process::exit(0);
-                    }
-                }
-                10 => {
-                    let type_ = get8(&file_contents, cur_offset);
-                    cur_offset += 1;
-
-                    let offset = get16(&file_contents, cur_offset);
-                    cur_offset += 2;
-
-                    if let Some(section) = sections.get_mut(&(cur_section_id as usize)) {
-                        let result = read_expression_recursive(
-                            &file_contents,
-                            &mut cur_offset,
-                            offset as usize + patch_offset,
-                            section,
-                        );
-                        if let Some(got_it) = result {
-                            section.relocations.push(got_it);
-                        }
-                    } else {
-                        println!("missing section");
-                        std::process::exit(0);
-                    }
-                }
-                12 => {
-                    let number = get16(&file_contents, cur_offset);
-                    cur_offset += 2;
-
-                    let section_id = get16(&file_contents, cur_offset);
-                    cur_offset += 2;
-
-                    let offset = get32(&file_contents, cur_offset);
-                    cur_offset += 4;
-
-                    let len = get8(&file_contents, cur_offset);
-                    cur_offset += 1;
-
-                    let name_vec: Vec<u8> = getn(&file_contents, cur_offset, len as usize);
-                    cur_offset += len as usize;
-                    match String::from_utf8(name_vec) {
-                        Ok(string) => {
-                            println!("xdef name {} offset {}", string, offset);
-
-                            let new_struct = Symbol {
-                                number: Some(number),
-                                section: section_id,
-                                offset: Some(offset),
-                                len: len,
-                                name: string,
-                                size: None,
-                            };
-
-                            if let Some(section) = sections.get_mut(&(section_id as usize)) {
-                                section.symbols.push(new_struct);
-                            } else {
-                                println!("missing section");
-                                std::process::exit(0);
-                            }
-                        }
-                        Err(_) => todo!(),
-                    }
-                }
-                14 => {
-                    let number = get16(&file_contents, cur_offset);
-                    cur_offset += 2;
-                    let len = get8(&file_contents, cur_offset);
-                    cur_offset += 1;
-
-                    let name_vec: Vec<u8> = getn(&file_contents, cur_offset, len as usize);
-                    cur_offset += len as usize;
-                    match String::from_utf8(name_vec) {
-                        Ok(string) => {
-                            println!("xref name {} len {} number {}", string, len, number);
-
-                            let new_struct = Symbol {
-                                number: Some(number),
-                                section: cur_section_id,
-                                offset: None,
-                                len: len,
-                                name: string,
-                                size: None,
-                            };
-
-                            if let Some(section) = sections.get_mut(&(cur_section_id as usize)) {
-                                section.symbols.push(new_struct);
-                            } else {
-                                println!("missing section");
-                                std::process::exit(0);
-                            }
-                        }
-                        Err(_) => todo!(),
-                    }
-                }
-                16 => {
-                    // section
-                    let section_id = get16(&file_contents, cur_offset);
-                    cur_offset += 2;
-                    let group: u32 = get8(&file_contents, cur_offset);
-                    cur_offset += 1;
-                    let align: u32 = get16(&file_contents, cur_offset);
-                    cur_offset += 2;
-                    let len = get8(&file_contents, cur_offset);
-                    cur_offset += 1;
-
-                    let name_vec: Vec<u8> = getn(&file_contents, cur_offset, len as usize);
-                    cur_offset += len as usize;
-                    match String::from_utf8(name_vec) {
-                        Ok(string) => {
-                            println!(
-                                "section name {} id {} group {} align {} len {}",
-                                string, section_id, group, align, len
-                            );
-
-                            if let Some(section) = sections.get_mut(&(section_id as usize)) {
-                                println!("section already exists");
-                                std::process::exit(1);
-                            } else {
-                                let new_section = Section {
-                                    symbols: Vec::new(),
-                                    name: string,
-                                    bytes: Vec::new(),
-                                    relocations: Vec::new(),
-                                    zeroes: 0,
-                                };
-                                sections.insert(section_id as usize, new_section);
-                            }
-                        }
-                        Err(_) => todo!(),
-                    }
-                }
-                18 => {
-                    let section_id = get16(&file_contents, cur_offset);
-                    cur_offset += 2;
-                    let offset: u32 = get32(&file_contents, cur_offset);
-                    cur_offset += 4;
-                    let len = get8(&file_contents, cur_offset);
-                    cur_offset += 1;
-
-                    let name_vec: Vec<u8> = getn(&file_contents, cur_offset, len as usize);
-                    cur_offset += len as usize;
-                    match String::from_utf8(name_vec) {
-                        Ok(string) => {
-                            println!("local sym name {} offset {} len {}", string, offset, len);
-
-                            if let Some(section) = sections.get_mut(&(section_id as usize)) {
-                                let new_struct = Symbol {
-                                    number: None,
-                                    section: section_id,
-                                    offset: Some(offset),
-                                    len: len,
-                                    name: string,
-                                    size: None,
-                                };
-
-                                section.symbols.push(new_struct);
-                            } else {
-                                println!("section doesnt exist");
-                                std::process::exit(1);
-                            }
-                        }
-                        Err(_) => todo!(),
-                    }
-                }
-                28 => {
-                    let number = get16(&file_contents, cur_offset);
-                    cur_offset += 2;
-
-                    let len = get8(&file_contents, cur_offset);
-                    cur_offset += 1;
-
-                    let name_vec: Vec<u8> = getn(&file_contents, cur_offset, len as usize);
-                    cur_offset += len as usize;
-                    match String::from_utf8(name_vec) {
-                        Ok(string) => {
-                            println!("file name {} number {}", string, number);
-                        }
-                        Err(_) => todo!(),
-                    }
-                }
-                46 => {
-                    let cpu = get8(&file_contents, cur_offset);
-                    cur_offset += 1;
-                    println!("cpu {}", cpu);
-                }
-                48 => {
-                    // xbss
-                    let number = get16(&file_contents, cur_offset);
-                    cur_offset += 2;
-
-                    let section_id = get16(&file_contents, cur_offset);
-                    cur_offset += 2;
-
-                    let size = get32(&file_contents, cur_offset);
-                    cur_offset += 4;
-
-                    let len = get8(&file_contents, cur_offset);
-                    cur_offset += 1;
-
-                    let name_vec: Vec<u8> = getn(&file_contents, cur_offset, len as usize);
-                    cur_offset += len as usize;
-                    match String::from_utf8(name_vec) {
-                        Ok(string) => {
-                            println!("xbss name {} number {}", string, number);
-
-                            if let Some(section) = sections.get_mut(&(section_id as usize)) {
-                                let new_struct = Symbol {
-                                    number: Some(number),
-                                    section: section_id,
-                                    offset: None,
-                                    size: Some(size),
-                                    len: len,
-                                    name: string,
-                                };
-
-                                section.symbols.push(new_struct);
-                            } else {
-                                println!("section doesnt exist");
-                                std::process::exit(1);
-                            }
-                        }
-                        Err(_) => todo!(),
-                    }
-                }
-                _ => {
-                    println!("unknown chunk {}", chunk);
-                    std::process::exit(0);
-                }
-            }
-            end_offset = cur_offset;
-        }
-
-        disassemble_obj(&sections, name, file_contents, &output_path, objs);
+        parse_obj_inner(
+            file_contents,
+            offset,
+            name,
+            output_path,
+            objs,
+            magic_offset + 4,
+            &mut end_offset,
+        );
     } else {
         println!("not an obj  {:08X} \n", magic);
     }
@@ -1062,6 +1083,21 @@ fn parse_lib(
                         }
                     }
                 }
+            } else if thing == 0x024B4E4C
+            // LNK
+            {
+                let offset = 0;
+                let lowercase_name = "output".to_string();
+                let mut end_offset = 0;
+                parse_obj_inner(
+                    &file_contents,
+                    offset,
+                    lowercase_name,
+                    output_path,
+                    objs,
+                    4,
+                    &mut end_offset,
+                );
             }
         }
         Err(error) => {
