@@ -198,8 +198,8 @@ fn find_reloc(
                 let instruction = Instruction::new(instr, 0, InstrCategory::CPU);
                 let thing = instruction.disassemble(None, 0);
                 println!(
-                    "got symbol for reloc: cur_off {} rel_off {} name {} instr {}",
-                    cur_offset, relocation.offset, symbol.name, thing
+                    "got symbol for reloc: cur_off {} rel_off {} name {} instr {} type {:?}",
+                    cur_offset, relocation.offset, symbol.name, thing, relocation.type_
                 );
                 return Some(symbol.name.clone());
             }
@@ -208,6 +208,10 @@ fn find_reloc(
 
     // generate add stuff.
     for relocation in &section.relocations {
+        if !relocation.offset == cur_offset
+        {
+            continue;
+        }
         if relocation.type_ == RelocationTypes::Add {
             if let (Some(left_value), Some(right_value)) =
                 (relocation.left.clone(), relocation.right.clone())
@@ -238,7 +242,15 @@ fn find_reloc(
                                     if right_value.offset == cur_offset {
                                         return Some(name);
                                     }
-                                } else {
+                                } else if (section_base_section.name == ".rdata") {
+                                    // value is offset into rodata section?
+                                    let name = format!("R_{:08X}", value);
+
+                                    if right_value.offset == cur_offset {
+                                        return Some(name);
+                                    }
+                                }
+                                else {
                                     println!(
                                         "missing reloc handling {}",
                                         section_base_section.name
@@ -281,16 +293,17 @@ fn find_reloc(
                                     if let Some(right_right_value) = right_right.value {
                                         if let Some(left_value_value) = left_value.value {
                                             // all offsets seem to always be the same
+
+                                            assert!(section_base_section.name == ".bss");
+
                                             let name = format!(
-                                                "{}+{}+{}",
-                                                section_base_section.name,
+                                                "B_{:08X}+{}",
                                                 right_right_value,
                                                 left_value_value
                                             );
 
                                             if right_value.offset == cur_offset {
-                                                return None; // ignore these for now
-                                                             // return Some(name);
+                                                return Some(name);
                                             }
                                         }
                                     }
@@ -443,7 +456,7 @@ fn do_code_section(
 
             match symbol_map.get(symbol_addr) {
                 Some(found_symbol) => {
-                    println!("got symbol {}", found_symbol.name);
+                    println!("got symbol {} addr {}", found_symbol.name, symbol_addr);
 
                     cur_func_string +=
                         format!(".size {}, . - {}\n", cur_func_name, cur_func_name).as_str();
@@ -469,11 +482,9 @@ fn do_code_section(
                 None => {}
             }
             let instr: u32 = get32(&code, cur_offset);
-            cur_offset += 4;
             let instruction = Instruction::new(instr, 0, InstrCategory::CPU);
 
-            // why off by 4?
-            match find_reloc(section, (cur_offset - start_offset) - 4, instr, &sections) {
+            match find_reloc(section, (cur_offset - start_offset), instr, &sections) {
                 Some(reloc) => {
                     if instruction.can_be_hi() {
                         let thing = instruction.disassemble(Some(&format!("%hi({})", reloc)), 0);
@@ -562,6 +573,7 @@ fn do_code_section(
                     }
                 }
             }
+            cur_offset += 4;
         }
 
         if cur_func_string.len() > 0 {
@@ -618,7 +630,7 @@ fn disassemble_obj(
             } else {
                 println!("Offset is None");
             }
-            println!("symbol name {}", symbol.name);
+            println!("section {} symbol name {}", section.name, symbol.name);
         }
 
         if section.name == ".text" {
@@ -653,6 +665,7 @@ fn parse_obj(
     let mut end_offset: usize = 0;
     let mut sections: HashMap<usize, Section> = HashMap::new();
     let mut cur_section_id = 0;
+    let mut patch_offset = 0;
 
     if magic == 0x024B4E4C
     //OBJ
@@ -707,6 +720,9 @@ fn parse_obj(
                     let id = get16(&file_contents, cur_offset);
                     cur_section_id = id;
                     cur_offset += 2;
+                    if let Some(section) = sections.get_mut(&(cur_section_id as usize)) {
+                        patch_offset = section.bytes.len();
+                    }
                 }
                 8 => {
                     //	Uninitialised data
@@ -730,7 +746,7 @@ fn parse_obj(
                         let result = read_expression_recursive(
                             &file_contents,
                             &mut cur_offset,
-                            offset as usize,
+                            offset as usize + patch_offset,
                             section,
                         );
                         if let Some(got_it) = result {
@@ -1165,14 +1181,14 @@ mod tests {
         );
     }
 
-    // #[test]
-    // fn testSpuVmAlloc() {
-    //     compare_asm(
-    //         "test_data/SpuVmAlloc.s",
-    //         "SpuVmAlloc",
-    //         &Some("VMANAGER".to_string()),
-    //     );
-    // }
+    #[test]
+    fn testSpuVmAlloc() {
+        compare_asm(
+            "test_data/SpuVmAlloc.s",
+            "SpuVmAlloc",
+            &Some("VMANAGER".to_string()),
+        );
+    }
 
     #[test]
     fn testSpuVmVSetUp() {
@@ -1189,6 +1205,15 @@ mod tests {
             "test_data/SsVabTransBodyPartly.s",
             "SsVabTransBodyPartly",
             &Some("VS_VTBP".to_string()),
+        );
+    }
+
+    #[test]
+    fn test_SsInitSoundSep() {
+        compare_asm(
+            "test_data/_SsInitSoundSep.s",
+            "_SsInitSoundSep",
+            &Some("SEPINIT".to_string()),
         );
     }
 }
