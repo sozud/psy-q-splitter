@@ -1511,6 +1511,8 @@ fn diff_objs(expected_path: String, actual_path: String) {
     let mut expected_commands: Vec<Command> = Vec::new();
     let output_path = "../output";
 
+    println!("comparing {} and {}", expected_path, actual_path);
+
     match read_file_to_vec(&expected_path) {
         Ok(expected_contents) => {
             let thing = get32(&expected_contents, 0);
@@ -1536,7 +1538,7 @@ fn diff_objs(expected_path: String, actual_path: String) {
             }
         }
         Err(error) => {
-            println!("Error: {:?} {}", error, expected_path);
+            println!("Error: {:?} expected_path {}", error, expected_path);
             std::process::exit(1);
         }
     }
@@ -1567,24 +1569,43 @@ fn diff_objs(expected_path: String, actual_path: String) {
             }
         }
         Err(error) => {
-            println!("Error: {:?} {}", error, actual_path);
+            println!("Error: {:?} actual_path {}", error, actual_path);
             std::process::exit(1);
         }
     }
 
-    // let json_string = serde_json::to_string_pretty(&commands).unwrap();
-    // println!("{}", json_string);
-    // std::process::exit(0);
+    let header = format!("{: <32}{}", "expected", "actual");
+    println!("{}", header);
 
     for (command_e, command_a) in expected_commands.iter().zip(actual_commands.iter()) {
+        let spacing = 20;
+
+        let e_string = serde_json::to_string_pretty(&command_e).unwrap();
+        let a_string = serde_json::to_string_pretty(&command_a).unwrap();
+
+        let expected_lines: Vec<&str> = e_string.lines().collect();
+        let actual_lines: Vec<&str> = a_string.lines().collect();
+
+        let max_len1 = expected_lines
+            .iter()
+            .map(|line| line.len())
+            .max()
+            .unwrap_or(0);
+
+        // Iterate through the lines and print them side by side
+        for (line1, line2) in expected_lines.iter().zip(actual_lines.iter()) {
+            let padded_string = format!("{: <32}{}", line1, line2);
+            println!("{}", padded_string);
+        }
+
         if command_e != command_a {
             println!("mismatch");
             std::process::exit(1);
-            // let spacing = max_len1.saturating_sub(line1.len());
-            // println!("{}{}{}", line1, " ".repeat(spacing), line2);
-            // assert_eq!(line1, line2);
         }
     }
+
+    println!("objs matched");
+    std::process::exit(0);
 }
 
 fn main() {
@@ -1597,6 +1618,7 @@ fn main() {
 
     if args[1] == "diff" {
         diff_objs(args[2].clone(), args[3].clone());
+        return;
     }
 
     let input_path = &args[1];
