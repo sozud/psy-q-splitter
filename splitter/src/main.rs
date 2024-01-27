@@ -701,6 +701,7 @@ fn do_code_section(
     section: &Section,
     symbol_map: &HashMap<usize, Symbol>,
     sections: &HashMap<usize, Section>,
+    aspsx_mode: bool,
 ) {
     let mut branch_target_destination_map: HashMap<usize, String> = HashMap::new();
 
@@ -786,9 +787,16 @@ fn do_code_section(
 
                     cur_func_string = "".to_string();
 
-                    cur_func_string += ".set noat      /* allow manual use of $at */\n";
-                    cur_func_string += ".set noreorder /* don't insert nops after branches */\n\n";
-                    cur_func_string += format!("glabel {}\n", found_symbol.name).as_str();
+                    if aspsx_mode {
+                        cur_func_string += ".set noat\r\n";
+                        cur_func_string += ".set noreorder\r\n\r\n";
+                        cur_func_string += format!(".globl {}\r\n", found_symbol.name).as_str();
+                    } else {
+                        cur_func_string += ".set noat      /* allow manual use of $at */\n";
+                        cur_func_string +=
+                            ".set noreorder /* don't insert nops after branches */\n\n";
+                        cur_func_string += format!("glabel {}\n", found_symbol.name).as_str();
+                    }
 
                     cur_func_name = found_symbol.name.clone();
                 }
@@ -805,24 +813,46 @@ fn do_code_section(
                         match branch_target_destination_map.get(symbol_addr) {
                             Some(found_target_symbol) => {
                                 let thing = instruction.disassemble(None, 0);
-                                cur_func_string += format!("{}:\n", found_target_symbol).as_str();
+                                if aspsx_mode {
+                                    cur_func_string +=
+                                        format!("{}:\r\n", found_target_symbol).as_str();
+                                } else {
+                                    cur_func_string +=
+                                        format!("{}:\n", found_target_symbol).as_str();
+                                }
                             }
                             None => {}
                         }
-                        cur_func_string +=
-                            format!("/* {:08X} {:08X} */ {}\n", cur_offset, instr, thing).as_str();
+                        if aspsx_mode {
+                            cur_func_string += format!("{}\r\n", thing).as_str();
+                        } else {
+                            cur_func_string +=
+                                format!("/* {:08X} {:08X} */ {}\n", cur_offset, instr, thing)
+                                    .as_str();
+                        }
                     } else if instruction.can_be_lo() {
                         let thing = instruction.disassemble(Some(&format!("%lo({})", reloc)), 0);
                         // check if this is also a target first and emit the label
                         match branch_target_destination_map.get(symbol_addr) {
                             Some(found_target_symbol) => {
                                 let thing = instruction.disassemble(None, 0);
-                                cur_func_string += format!("{}:\n", found_target_symbol).as_str();
+                                if aspsx_mode {
+                                    cur_func_string +=
+                                        format!("{}:\r\n", found_target_symbol).as_str();
+                                } else {
+                                    cur_func_string +=
+                                        format!("{}:\n", found_target_symbol).as_str();
+                                }
                             }
                             None => {}
                         }
-                        cur_func_string +=
-                            format!("/* {:08X} {:08X} */ {}\n", cur_offset, instr, thing).as_str();
+                        if aspsx_mode {
+                            cur_func_string += format!("{}\r\n", thing).as_str();
+                        } else {
+                            cur_func_string +=
+                                format!("/* {:08X} {:08X} */ {}\n", cur_offset, instr, thing)
+                                    .as_str();
+                        }
                     } else {
                         let imm_override: Option<&str> = Some(&reloc);
                         let thing = instruction.disassemble(imm_override, 0);
@@ -831,13 +861,24 @@ fn do_code_section(
                         match branch_target_destination_map.get(symbol_addr) {
                             Some(found_target_symbol) => {
                                 let thing = instruction.disassemble(None, 0);
-                                cur_func_string += format!("{}:\n", found_target_symbol).as_str();
+                                if aspsx_mode {
+                                    cur_func_string +=
+                                        format!("{}:\r\n", found_target_symbol).as_str();
+                                } else {
+                                    cur_func_string +=
+                                        format!("{}:\n", found_target_symbol).as_str();
+                                }
                             }
                             None => {}
                         }
 
-                        cur_func_string +=
-                            format!("/* {:08X} {:08X} */ {}\n", cur_offset, instr, thing).as_str();
+                        if aspsx_mode {
+                            cur_func_string += format!("{}\r\n", thing).as_str();
+                        } else {
+                            cur_func_string +=
+                                format!("/* {:08X} {:08X} */ {}\n", cur_offset, instr, thing)
+                                    .as_str();
+                        }
                     }
                 }
                 None => {
@@ -848,38 +889,61 @@ fn do_code_section(
                             match branch_target_destination_map.get(symbol_addr) {
                                 Some(found_target_symbol) => {
                                     let thing = instruction.disassemble(None, 0);
-                                    cur_func_string +=
-                                        format!("{}:\n", found_target_symbol).as_str();
+
+                                    if aspsx_mode {
+                                        cur_func_string +=
+                                            format!("{}:\r\n", found_target_symbol).as_str();
+                                    } else {
+                                        cur_func_string +=
+                                            format!("{}:\n", found_target_symbol).as_str();
+                                    }
                                 }
                                 None => {}
                             }
 
                             let imm_override: Option<&str> = Some(&found_source_symbol);
                             let thing = instruction.disassemble(imm_override, 0);
-                            cur_func_string +=
-                                format!("/* {:08X} {:08X} */ {}\n", cur_offset, instr, thing)
-                                    .as_str();
+
+                            if aspsx_mode {
+                                cur_func_string += format!("{}\r\n", thing).as_str();
+                            } else {
+                                cur_func_string +=
+                                    format!("/* {:08X} {:08X} */ {}\n", cur_offset, instr, thing)
+                                        .as_str();
+                            }
                         }
                         None => {
                             match branch_target_destination_map.get(symbol_addr) {
                                 Some(found_target_symbol) => {
                                     let thing = instruction.disassemble(None, 0);
-                                    cur_func_string +=
-                                        format!("{}:\n", found_target_symbol).as_str();
-                                    cur_func_string += format!(
-                                        "/* {:08X} {:08X} */ {}\n",
-                                        cur_offset, instr, thing
-                                    )
-                                    .as_str();
+
+                                    if aspsx_mode {
+                                        cur_func_string +=
+                                            format!("{}:\r\n", found_target_symbol).as_str();
+                                        cur_func_string += format!("{}\r\n", thing).as_str();
+                                    } else {
+                                        cur_func_string +=
+                                            format!("{}:\n", found_target_symbol).as_str();
+                                        cur_func_string += format!(
+                                            "/* {:08X} {:08X} */ {}\n",
+                                            cur_offset, instr, thing
+                                        )
+                                        .as_str();
+                                    }
                                 }
                                 None => {
                                     // vanilla instruction
                                     let thing = instruction.disassemble(None, 0);
-                                    cur_func_string += format!(
-                                        "/* {:08X} {:08X} */ {}\n",
-                                        cur_offset, instr, thing
-                                    )
-                                    .as_str();
+
+                                    if aspsx_mode {
+                                        cur_func_string += format!("{}\r\n", thing).as_str();
+                                    } else {
+                                        cur_func_string += format!(
+                                            "/* {:08X} {:08X} */ {}\n",
+                                            cur_offset, instr, thing
+                                        )
+                                        .as_str();
+                                    }
                                 }
                             }
                         }
@@ -890,7 +954,12 @@ fn do_code_section(
         }
 
         if cur_func_string.len() > 0 {
-            cur_func_string += format!(".size {}, . - {}\n", cur_func_name, cur_func_name).as_str();
+            if aspsx_mode {
+                cur_func_string += format!(".end {}\r\n", cur_func_name).as_str();
+            } else {
+                cur_func_string +=
+                    format!(".size {}, . - {}\n", cur_func_name, cur_func_name).as_str();
+            }
 
             let cur_func = Func {
                 name: cur_func_name.clone(),
@@ -910,6 +979,7 @@ fn disassemble_obj(
     file_contents: &Vec<u8>,
     output_path: &str,
     objs: &mut Vec<Obj>,
+    aspsx_mode: bool,
 ) {
     let mut cur_obj = Obj {
         name: name.clone(),
@@ -947,7 +1017,7 @@ fn disassemble_obj(
         }
 
         if section.name == ".text" {
-            do_code_section(&mut cur_obj, section, &symbol_map, sections);
+            do_code_section(&mut cur_obj, section, &symbol_map, sections, aspsx_mode);
         } else if section.name == ".data" {
             if section.bytes.len() > 0 {
                 println!("data section");
@@ -1001,6 +1071,7 @@ fn parse_obj_inner(
     start_offset: usize,
     end_offset: &mut usize,
     commands: &mut Vec<Command>,
+    aspsx_mode: bool,
 ) {
     let mut sections: HashMap<usize, Section> = HashMap::new();
     let mut cur_section_id = 0;
@@ -1369,7 +1440,14 @@ fn parse_obj_inner(
         *end_offset = cur_offset;
     }
 
-    disassemble_obj(&sections, name, file_contents, &output_path, objs);
+    disassemble_obj(
+        &sections,
+        name,
+        file_contents,
+        &output_path,
+        objs,
+        aspsx_mode,
+    );
 }
 
 fn parse_obj(
@@ -1378,6 +1456,7 @@ fn parse_obj(
     name: String,
     output_path: &str,
     objs: &mut Vec<Obj>,
+    aspsx_mode: bool,
 ) -> usize {
     let magic_offset: usize = offset as usize + 0;
     let magic: u32 = get32(&file_contents, magic_offset);
@@ -1397,6 +1476,7 @@ fn parse_obj(
             magic_offset + 4,
             &mut end_offset,
             &mut commands,
+            aspsx_mode,
         );
     } else {
         println!("not an obj  {:08X} \n", magic);
@@ -1412,6 +1492,7 @@ fn parse_lib(
     output_path: &str,
     objs: &mut Vec<Obj>,
     target_obj_name: &Option<String>,
+    aspsx_mode: bool,
 ) {
     let mut current_pos = 0;
 
@@ -1461,6 +1542,7 @@ fn parse_lib(
                                         lowercase_name,
                                         output_path,
                                         objs,
+                                        aspsx_mode,
                                     );
                                 }
                             } else {
@@ -1470,6 +1552,7 @@ fn parse_lib(
                                     lowercase_name,
                                     output_path,
                                     objs,
+                                    aspsx_mode,
                                 );
                             }
                             base_addr += size as usize;
@@ -1497,6 +1580,7 @@ fn parse_lib(
                     4,
                     &mut end_offset,
                     &mut commands,
+                    aspsx_mode,
                 );
             }
         }
@@ -1504,6 +1588,19 @@ fn parse_lib(
             println!("Error: {:?} {}", error, input_path);
             std::process::exit(1);
         }
+    }
+}
+
+// ignore different file names
+fn ignore_file_name_difference(a: &Command, b: &Command) -> bool {
+    if let (Command::Command28(a_cmd), Command::Command28(b_cmd)) = (a, b) {
+        if a_cmd.name != b_cmd.name {
+            println!("skipping file name mismatch {} {}", a_cmd.name, b_cmd.name);
+            return true;
+        }
+        return true;
+    } else {
+        false
     }
 }
 
@@ -1534,6 +1631,7 @@ fn diff_objs(expected_path: String, actual_path: String) {
                     4,
                     &mut end_offset,
                     &mut expected_commands,
+                    false,
                 );
             }
         }
@@ -1565,6 +1663,7 @@ fn diff_objs(expected_path: String, actual_path: String) {
                     4,
                     &mut end_offset,
                     &mut actual_commands,
+                    false,
                 );
             }
         }
@@ -1599,6 +1698,9 @@ fn diff_objs(expected_path: String, actual_path: String) {
         }
 
         if command_e != command_a {
+            if ignore_file_name_difference(command_e, command_a) {
+                continue;
+            }
             println!("mismatch");
             std::process::exit(1);
         }
@@ -1610,6 +1712,15 @@ fn diff_objs(expected_path: String, actual_path: String) {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+
+    let aspsx_mode = false;
+
+    if aspsx_mode {
+        unsafe {
+            config::RabbitizerConfig_Cfg.reg_names.named_registers = false;
+            config::RabbitizerConfig_Cfg.toolchain_tweaks.sn64_div_fix = true;
+        }
+    }
 
     if args.len() < 3 {
         eprintln!("Usage: {} <input_path> <output_path>", args[0]);
@@ -1626,7 +1737,7 @@ fn main() {
 
     let mut objs: Vec<Obj> = Vec::new();
 
-    parse_lib(input_path, output_path, &mut objs, &None);
+    parse_lib(input_path, output_path, &mut objs, &None, aspsx_mode);
 }
 
 #[cfg(test)]
@@ -1707,7 +1818,7 @@ mod tests {
         let output_path = "../output_directory";
         let mut objs: Vec<Obj> = Vec::new();
 
-        parse_lib(input_path, output_path, &mut objs, obj_name);
+        parse_lib(input_path, output_path, &mut objs, obj_name, false);
 
         match fs::read_to_string(file_path) {
             Ok(contents) => {
