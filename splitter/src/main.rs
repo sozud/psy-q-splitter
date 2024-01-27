@@ -1,7 +1,173 @@
 use rabbitizer::{config, Abi, InstrCategory, Instruction, OperandType};
+use serde_derive::{Deserialize, Serialize};
+use serde_json;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read};
+
+#[derive(Serialize, Deserialize, PartialEq)]
+struct CommandEnd {}
+
+#[derive(Serialize, Deserialize, PartialEq)]
+struct CommandCode {
+    len: u16,
+    bytes: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize, PartialEq)]
+struct CommandSectionSwitch {
+    id: u16,
+}
+
+#[derive(Serialize, Deserialize, PartialEq)]
+struct CommandUninitializedData {
+    size: u32,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+struct ExprConstant {
+    value: u32,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+struct ExprAddrOfSymbol {
+    idx: u16,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+struct ExprSectionBase {
+    idx: u16,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+struct ExprAdd {
+    left: Option<Rc<Expr>>,
+    right: Option<Rc<Expr>>,
+}
+
+impl PartialEq for Expr {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Expr::Expr0(lhs), Expr::Expr0(rhs)) => lhs == rhs,
+            (Expr::Expr2(lhs), Expr::Expr2(rhs)) => lhs == rhs,
+            (Expr::Expr4(lhs), Expr::Expr4(rhs)) => lhs == rhs,
+            (Expr::Expr2C(lhs), Expr::Expr2C(rhs)) => lhs == rhs,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Expr {}
+
+impl PartialEq for Command {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Command::Command0(lhs), Command::Command0(rhs)) => lhs == rhs,
+            (Command::Command2(lhs), Command::Command2(rhs)) => lhs == rhs,
+            (Command::Command6(lhs), Command::Command6(rhs)) => lhs == rhs,
+            (Command::Command8(lhs), Command::Command8(rhs)) => lhs == rhs,
+            (Command::Command10(lhs), Command::Command10(rhs)) => lhs == rhs,
+            (Command::Command12(lhs), Command::Command12(rhs)) => lhs == rhs,
+            (Command::Command14(lhs), Command::Command14(rhs)) => lhs == rhs,
+            (Command::Command16(lhs), Command::Command16(rhs)) => lhs == rhs,
+            (Command::Command18(lhs), Command::Command18(rhs)) => lhs == rhs,
+            (Command::Command28(lhs), Command::Command28(rhs)) => lhs == rhs,
+            (Command::Command46(lhs), Command::Command46(rhs)) => lhs == rhs,
+            (Command::Command48(lhs), Command::Command48(rhs)) => lhs == rhs,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Command {}
+
+#[derive(Clone, Serialize, Deserialize)]
+enum Expr {
+    Expr0(ExprConstant),
+    Expr2(ExprAddrOfSymbol),
+    Expr4(ExprSectionBase),
+    Expr2C(ExprAdd),
+}
+
+#[derive(Serialize, Deserialize, PartialEq)]
+struct CommandReloc {
+    type_: u8,
+    offset: u16,
+    expr: Expr,
+}
+#[derive(Serialize, Deserialize, PartialEq)]
+struct CommandXdef {
+    number: u16,
+    section_id: u16,
+    offset: u32,
+    len: u8,
+    name: String,
+}
+
+#[derive(Serialize, Deserialize, PartialEq)]
+struct CommandXref {
+    number: u16,
+    len: u8,
+    name: String,
+}
+
+#[derive(Serialize, Deserialize, PartialEq)]
+struct CommandSection {
+    section_id: u16,
+    group: u8,
+    align: u16,
+    len: u8,
+    name: String,
+}
+
+#[derive(Serialize, Deserialize, PartialEq)]
+struct CommandLocalSym {
+    section_id: u16,
+    offset: u32,
+    len: u8,
+    name: String,
+}
+
+#[derive(Serialize, Deserialize, PartialEq)]
+struct CommandFileName {
+    number: u16,
+    len: u8,
+    name: String,
+}
+
+#[derive(Serialize, Deserialize, PartialEq)]
+struct CommandCpu {
+    cpu: u8,
+}
+
+#[derive(Serialize, Deserialize, PartialEq)]
+struct CommandXbss {
+    number: u16,
+    section_id: u16,
+    size: u32,
+    len: u8,
+    name: String,
+}
+
+#[derive(Serialize, Deserialize)]
+enum Command {
+    Command0(CommandEnd),
+    Command2(CommandCode),
+    Command6(CommandSectionSwitch),
+    Command8(CommandUninitializedData),
+    Command10(CommandReloc),
+    Command12(CommandXdef),
+    Command14(CommandXref),
+    Command16(CommandSection),
+    Command18(CommandLocalSym),
+    Command28(CommandFileName),
+    Command46(CommandCpu),
+    Command48(CommandXbss),
+}
+
+struct SerializedObj {
+    commands: Vec<Command>,
+}
 
 fn read_file_to_vec(filename: &str) -> io::Result<Vec<u8>> {
     let mut file = File::open(filename)?;
@@ -58,8 +224,8 @@ struct CodeSection {
     len: u32,
     start_offset: usize,
 }
-#[derive(Clone, Debug, PartialEq)]
 
+#[derive(Clone, Debug, PartialEq)]
 enum RelocationTypes {
     Constant,
     AddressOfSymbol,
@@ -166,6 +332,129 @@ fn read_expression_recursive(
     None
 }
 
+fn read_expression_expr(
+    file_contents: &Vec<u8>,
+    offset: &mut usize,
+    reloc_offset: usize,
+    section: &mut Section,
+) -> Expr {
+    let op = get8(file_contents, offset.clone());
+    *offset += 1;
+
+    println!("read_expression {:02X}", op);
+    match op {
+        0 => {
+            // constant
+            let value = get32(file_contents, offset.clone());
+            *offset += 4;
+            return Expr::Expr0(ExprConstant { value: value });
+        }
+        2 => {
+            // addr of symbol
+            let idx = get16(file_contents, offset.clone());
+            *offset += 2;
+            return Expr::Expr2(ExprAddrOfSymbol { idx: idx as u16 });
+        }
+        4 => {
+            // section base
+            let idx = get16(file_contents, offset.clone());
+            *offset += 2;
+            return Expr::Expr4(ExprSectionBase { idx: idx as u16 });
+        }
+        0x2c => {
+            // add
+            let left = read_expression_expr(file_contents, offset, reloc_offset, section);
+            let right = read_expression_expr(file_contents, offset, reloc_offset, section);
+
+            return Expr::Expr2C(ExprAdd {
+                left: Some(Rc::new(left.clone())),
+                right: Some(Rc::new(right.clone())),
+            });
+        }
+        _ => {
+            println!("unknown op {:02X}", op);
+            std::process::exit(1);
+        }
+    }
+
+    assert!(false);
+    Expr::Expr0(ExprConstant { value: 0 });
+}
+
+fn read_expression_serialize(
+    file_contents: &Vec<u8>,
+    offset: &mut usize,
+    reloc_offset: usize,
+    section: &mut Section,
+    offset_v: u16,
+) -> CommandReloc {
+    let op = get8(file_contents, offset.clone());
+    *offset += 1;
+
+    println!("read_expression {:02X}", op);
+    match op {
+        0 => {
+            // constant
+            let value = get32(file_contents, offset.clone());
+            *offset += 4;
+            return CommandReloc {
+                type_: op as u8,
+                offset: offset_v as u16,
+                expr: Expr::Expr0(ExprConstant { value: value }),
+            };
+        }
+        2 => {
+            // addr of symbol
+            let idx = get16(file_contents, offset.clone());
+            *offset += 2;
+
+            return CommandReloc {
+                type_: op as u8,
+                offset: offset_v as u16,
+                expr: Expr::Expr2(ExprAddrOfSymbol { idx: idx as u16 }),
+            };
+        }
+        4 => {
+            // section base
+            let idx = get16(file_contents, offset.clone());
+            *offset += 2;
+            return CommandReloc {
+                type_: op as u8,
+                offset: offset_v as u16,
+                expr: Expr::Expr4(ExprSectionBase { idx: idx as u16 }),
+            };
+        }
+        0x2c => {
+            // add
+            let left = read_expression_expr(file_contents, offset, reloc_offset, section);
+            let right = read_expression_expr(file_contents, offset, reloc_offset, section);
+
+            return CommandReloc {
+                type_: op as u8,
+                offset: offset_v as u16,
+                expr: Expr::Expr2C(ExprAdd {
+                    left: Some(Rc::new(left.clone())),
+                    right: Some(Rc::new(right.clone())),
+                }),
+            };
+        }
+        _ => {
+            println!("unknown op {:02X}", op);
+            std::process::exit(1);
+        }
+    }
+
+    assert!(false);
+    // should never arrive here
+    let ret = CommandReloc {
+        type_: op as u8,
+        offset: reloc_offset as u16,
+        expr: Expr::Expr0(ExprConstant { value: 0 }),
+    };
+    ret
+    // None
+}
+
 struct Section {
     symbols: Vec<Symbol>,
     name: String,
@@ -221,20 +510,30 @@ fn find_reloc(
                     if let Some(section_idx) = left_value.section_idx {
                         if let Some(section_base_section) = sections.get(&(section_idx as usize)) {
                             if let Some(value) = right_value.value {
-                                if (section_base_section.name == ".data") {
+                                if section_base_section.name == ".data" {
+                                    for s in &section_base_section.symbols {
+                                        if let Some(the_offset) = s.offset {
+                                            if value == the_offset {
+                                                if right_value.offset == cur_offset {
+                                                    return Some(s.name.clone());
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     // value is offset into data section
                                     let name = format!("D_{:08X}", value);
 
                                     if right_value.offset == cur_offset {
                                         return Some(name);
                                     }
-                                } else if (section_base_section.name == ".text") {
+                                } else if section_base_section.name == ".text" {
                                     let name = format!(".L{:08X}", value);
 
                                     if right_value.offset == cur_offset {
                                         return Some(name);
                                     }
-                                } else if (section_base_section.name == ".bss") {
+                                } else if section_base_section.name == ".bss" {
                                     // look for a bss symbol with this offset
                                     for s in &section_base_section.symbols {
                                         if let Some(the_offset) = s.offset {
@@ -252,7 +551,7 @@ fn find_reloc(
                                     if right_value.offset == cur_offset {
                                         return Some(name);
                                     }
-                                } else if (section_base_section.name == ".rdata") {
+                                } else if section_base_section.name == ".rdata" {
                                     // value is offset into rodata section?
                                     let name = format!("R_{:08X}", value);
 
@@ -292,8 +591,8 @@ fn find_reloc(
                     if let (Some(right_left), Some(right_right)) =
                         (right_value.left.clone(), right_value.right.clone())
                     {
-                        if (right_left.type_ == RelocationTypes::SectionBase
-                            && right_right.type_ == RelocationTypes::Constant)
+                        if right_left.type_ == RelocationTypes::SectionBase
+                            && right_right.type_ == RelocationTypes::Constant
                         {
                             if let Some(right_left_section_idx) = right_left.section_idx {
                                 if let Some(section_base_section) =
@@ -425,7 +724,7 @@ fn do_code_section(
                                     println!("generated {} {} {}", name, right_value.offset, value);
 
                                     // some sort of bug todo
-                                    if (value != 0) {
+                                    if value != 0 {
                                         branch_target_destination_map.insert(value as usize, name);
                                     } else {
                                         println!("branch target was 0");
@@ -498,7 +797,7 @@ fn do_code_section(
             let instr: u32 = get32(&code, cur_offset);
             let instruction = Instruction::new(instr, 0, InstrCategory::CPU);
 
-            match find_reloc(section, (cur_offset - start_offset), instr, &sections) {
+            match find_reloc(section, cur_offset - start_offset, instr, &sections) {
                 Some(reloc) => {
                     if instruction.can_be_hi() {
                         let thing = instruction.disassemble(Some(&format!("%hi({})", reloc)), 0);
@@ -649,6 +948,32 @@ fn disassemble_obj(
 
         if section.name == ".text" {
             do_code_section(&mut cur_obj, section, &symbol_map, sections);
+        } else if section.name == ".data" {
+            if section.bytes.len() > 0 {
+                println!("data section");
+
+                for (index, byte) in section.bytes.iter().enumerate() {
+                    print!("{:02X} ", byte);
+                    if (index + 1) % 16 == 0 {
+                        println!();
+                    }
+                }
+                println!();
+                // std::process::exit(1);
+            }
+        } else if section.name == ".rdata" {
+            if section.bytes.len() > 0 {
+                println!("rdata section");
+
+                for (index, byte) in section.bytes.iter().enumerate() {
+                    print!("{:02X} ", byte);
+                    if (index + 1) % 16 == 0 {
+                        println!();
+                    }
+                }
+                println!();
+                // std::process::exit(1);
+            }
         }
 
         let output_dir = format!("{}/{}", output_path, name).to_string();
@@ -675,6 +1000,7 @@ fn parse_obj_inner(
     objs: &mut Vec<Obj>,
     start_offset: usize,
     end_offset: &mut usize,
+    commands: &mut Vec<Command>,
 ) {
     let mut sections: HashMap<usize, Section> = HashMap::new();
     let mut cur_section_id = 0;
@@ -689,6 +1015,7 @@ fn parse_obj_inner(
 
         match chunk {
             0 => {
+                commands.push(Command::Command0(CommandEnd {}));
                 // end
                 break;
             }
@@ -697,6 +1024,11 @@ fn parse_obj_inner(
                 let len: u32 = get16(&file_contents, cur_offset);
                 cur_offset += 2;
                 println!("code size {}", len);
+
+                commands.push(Command::Command2(CommandCode {
+                    len: len as u16,
+                    bytes: file_contents[cur_offset..cur_offset + len as usize].to_vec(),
+                }));
 
                 if let Some(section) = sections.get_mut(&(cur_section_id as usize)) {
                     println!(
@@ -728,6 +1060,9 @@ fn parse_obj_inner(
             6 => {
                 // section switch
                 let id = get16(&file_contents, cur_offset);
+
+                commands.push(Command::Command6(CommandSectionSwitch { id: id as u16 }));
+
                 cur_section_id = id;
                 cur_offset += 2;
                 if let Some(section) = sections.get_mut(&(cur_section_id as usize)) {
@@ -738,6 +1073,9 @@ fn parse_obj_inner(
                 //	Uninitialised data
                 let size = get32(&file_contents, cur_offset);
                 cur_offset += 4;
+
+                commands.push(Command::Command8(CommandUninitializedData { size: size }));
+
                 if let Some(section) = sections.get_mut(&(cur_section_id as usize)) {
                     section.zeroes += size as usize;
                 } else {
@@ -753,6 +1091,18 @@ fn parse_obj_inner(
                 cur_offset += 2;
 
                 if let Some(section) = sections.get_mut(&(cur_section_id as usize)) {
+                    let temp = cur_offset;
+                    let ser = read_expression_serialize(
+                        &file_contents,
+                        &mut cur_offset,
+                        offset as usize + patch_offset,
+                        section,
+                        offset as u16,
+                    );
+
+                    commands.push(Command::Command10(ser));
+                    cur_offset = temp;
+
                     let result = read_expression_recursive(
                         &file_contents,
                         &mut cur_offset,
@@ -786,6 +1136,14 @@ fn parse_obj_inner(
                     Ok(string) => {
                         println!("xdef name {} offset {}", string, offset);
 
+                        commands.push(Command::Command12(CommandXdef {
+                            number: number as u16,
+                            section_id: section_id as u16,
+                            offset: offset as u32,
+                            len: len as u8,
+                            name: string.clone(),
+                        }));
+
                         let new_struct = Symbol {
                             number: Some(number),
                             section: section_id,
@@ -816,6 +1174,12 @@ fn parse_obj_inner(
                 match String::from_utf8(name_vec) {
                     Ok(string) => {
                         println!("xref name {} len {} number {}", string, len, number);
+
+                        commands.push(Command::Command14(CommandXref {
+                            number: number as u16,
+                            len: len as u8,
+                            name: string.clone(),
+                        }));
 
                         let new_struct = Symbol {
                             number: Some(number),
@@ -856,6 +1220,14 @@ fn parse_obj_inner(
                             string, section_id, group, align, len
                         );
 
+                        commands.push(Command::Command16(CommandSection {
+                            section_id: section_id as u16,
+                            group: group as u8,
+                            align: align as u16,
+                            len: len as u8,
+                            name: string.clone(),
+                        }));
+
                         if let Some(section) = sections.get_mut(&(section_id as usize)) {
                             println!("section already exists");
                             std::process::exit(1);
@@ -885,6 +1257,13 @@ fn parse_obj_inner(
                 cur_offset += len as usize;
                 match String::from_utf8(name_vec) {
                     Ok(string) => {
+                        commands.push(Command::Command18(CommandLocalSym {
+                            section_id: section_id as u16,
+                            offset: offset as u32,
+                            len: len as u8,
+                            name: string.clone(),
+                        }));
+
                         println!("local sym name {} offset {} len {}", string, offset, len);
 
                         if let Some(section) = sections.get_mut(&(section_id as usize)) {
@@ -917,6 +1296,12 @@ fn parse_obj_inner(
                 cur_offset += len as usize;
                 match String::from_utf8(name_vec) {
                     Ok(string) => {
+                        commands.push(Command::Command28(CommandFileName {
+                            number: number as u16,
+                            len: len as u8,
+                            name: string.clone(),
+                        }));
+
                         println!("file name {} number {}", string, number);
                     }
                     Err(_) => todo!(),
@@ -925,6 +1310,8 @@ fn parse_obj_inner(
             46 => {
                 let cpu = get8(&file_contents, cur_offset);
                 cur_offset += 1;
+
+                commands.push(Command::Command46(CommandCpu { cpu: cpu as u8 }));
                 println!("cpu {}", cpu);
             }
             48 => {
@@ -945,6 +1332,14 @@ fn parse_obj_inner(
                 cur_offset += len as usize;
                 match String::from_utf8(name_vec) {
                     Ok(string) => {
+                        commands.push(Command::Command48(CommandXbss {
+                            number: number as u16,
+                            section_id: section_id as u16,
+                            size: size as u32,
+                            len: len as u8,
+                            name: string.clone(),
+                        }));
+
                         println!("xbss name {} number {}", string, number);
 
                         if let Some(section) = sections.get_mut(&(section_id as usize)) {
@@ -991,6 +1386,8 @@ fn parse_obj(
     if magic == 0x024B4E4C
     //OBJ
     {
+        let mut commands: Vec<Command> = Vec::new();
+
         parse_obj_inner(
             file_contents,
             offset,
@@ -999,6 +1396,7 @@ fn parse_obj(
             objs,
             magic_offset + 4,
             &mut end_offset,
+            &mut commands,
         );
     } else {
         println!("not an obj  {:08X} \n", magic);
@@ -1056,7 +1454,7 @@ fn parse_lib(
                             let lowercase_name = string.to_lowercase();
 
                             if let Some(obj_name) = target_obj_name {
-                                if (string.trim() == obj_name) {
+                                if string.trim() == obj_name {
                                     parse_obj(
                                         &file_contents,
                                         offset as usize + base_addr as usize,
@@ -1089,6 +1487,7 @@ fn parse_lib(
                 let offset = 0;
                 let lowercase_name = "output".to_string();
                 let mut end_offset = 0;
+                let mut commands: Vec<Command> = Vec::new();
                 parse_obj_inner(
                     &file_contents,
                     offset,
@@ -1097,6 +1496,7 @@ fn parse_lib(
                     objs,
                     4,
                     &mut end_offset,
+                    &mut commands,
                 );
             }
         }
@@ -1107,12 +1507,96 @@ fn parse_lib(
     }
 }
 
+fn diff_objs(expected_path: String, actual_path: String) {
+    let mut expected_commands: Vec<Command> = Vec::new();
+    let output_path = "../output";
+
+    match read_file_to_vec(&expected_path) {
+        Ok(expected_contents) => {
+            let thing = get32(&expected_contents, 0);
+
+            if thing == 0x024B4E4C
+            // LNK
+            {
+                let offset = 0;
+                let lowercase_name = "output".to_string();
+                let mut end_offset = 0;
+                let mut objs: Vec<Obj> = Vec::new();
+
+                parse_obj_inner(
+                    &expected_contents,
+                    offset,
+                    lowercase_name,
+                    output_path,
+                    &mut objs,
+                    4,
+                    &mut end_offset,
+                    &mut expected_commands,
+                );
+            }
+        }
+        Err(error) => {
+            println!("Error: {:?} {}", error, expected_path);
+            std::process::exit(1);
+        }
+    }
+
+    let mut actual_commands: Vec<Command> = Vec::new();
+
+    match read_file_to_vec(&actual_path) {
+        Ok(actual_contents) => {
+            let thing = get32(&actual_contents, 0);
+
+            if thing == 0x024B4E4C
+            // LNK
+            {
+                let offset = 0;
+                let lowercase_name = "output".to_string();
+                let mut end_offset = 0;
+                let mut objs: Vec<Obj> = Vec::new();
+                parse_obj_inner(
+                    &actual_contents,
+                    offset,
+                    lowercase_name,
+                    output_path,
+                    &mut objs,
+                    4,
+                    &mut end_offset,
+                    &mut actual_commands,
+                );
+            }
+        }
+        Err(error) => {
+            println!("Error: {:?} {}", error, actual_path);
+            std::process::exit(1);
+        }
+    }
+
+    // let json_string = serde_json::to_string_pretty(&commands).unwrap();
+    // println!("{}", json_string);
+    // std::process::exit(0);
+
+    for (command_e, command_a) in expected_commands.iter().zip(actual_commands.iter()) {
+        if command_e != command_a {
+            println!("mismatch");
+            std::process::exit(1);
+            // let spacing = max_len1.saturating_sub(line1.len());
+            // println!("{}{}{}", line1, " ".repeat(spacing), line2);
+            // assert_eq!(line1, line2);
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 3 {
         eprintln!("Usage: {} <input_path> <output_path>", args[0]);
         std::process::exit(1);
+    }
+
+    if args[1] == "diff" {
+        diff_objs(args[2].clone(), args[3].clone());
     }
 
     let input_path = &args[1];
@@ -1185,7 +1669,7 @@ mod tests {
 
                     // Iterate through the lines and print them side by side
                     for (line1, line2) in expected_lines.iter().zip(actual_lines.iter()) {
-                        if (line1 != line2) {
+                        if line1 != line2 {
                             let spacing = max_len1.saturating_sub(line1.len());
                             println!("{}{}{}", line1, " ".repeat(spacing), line2);
                             assert_eq!(line1, line2);
