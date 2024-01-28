@@ -1604,73 +1604,66 @@ fn ignore_file_name_difference(a: &Command, b: &Command) -> bool {
     }
 }
 
-fn diff_objs(expected_path: String, actual_path: String) {
+fn disasm_at(code: &Vec<u8>, cur_offset: usize) -> String {
+    let instr: u32 = get32(&code, cur_offset);
+    let instruction = Instruction::new(instr, 0, InstrCategory::CPU);
+    return instruction.disassemble(None, 0);
+}
+
+fn diff_objs(expected_contents: &Vec<u8>, actual_contents: &Vec<u8>) {
     let mut expected_commands: Vec<Command> = Vec::new();
     let output_path = "../output";
 
-    println!("comparing {} and {}", expected_path, actual_path);
+    println!("diff_objs");
 
-    match read_file_to_vec(&expected_path) {
-        Ok(expected_contents) => {
-            let thing = get32(&expected_contents, 0);
+    if get32(&expected_contents, 0) == 0x024B4E4C
+    // LNK
+    {
+        println!("have LNK");
+        let offset = 0;
+        let lowercase_name = "output".to_string();
+        let mut end_offset = 0;
+        let mut objs: Vec<Obj> = Vec::new();
 
-            if thing == 0x024B4E4C
-            // LNK
-            {
-                let offset = 0;
-                let lowercase_name = "output".to_string();
-                let mut end_offset = 0;
-                let mut objs: Vec<Obj> = Vec::new();
-
-                parse_obj_inner(
-                    &expected_contents,
-                    offset,
-                    lowercase_name,
-                    output_path,
-                    &mut objs,
-                    4,
-                    &mut end_offset,
-                    &mut expected_commands,
-                    false,
-                );
-            }
-        }
-        Err(error) => {
-            println!("Error: {:?} expected_path {}", error, expected_path);
-            std::process::exit(1);
-        }
+        parse_obj_inner(
+            &expected_contents,
+            offset,
+            lowercase_name,
+            output_path,
+            &mut objs,
+            4,
+            &mut end_offset,
+            &mut expected_commands,
+            false,
+        );
+    } else {
+        println!("expected: not an obj");
+        std::process::exit(1);
     }
 
     let mut actual_commands: Vec<Command> = Vec::new();
 
-    match read_file_to_vec(&actual_path) {
-        Ok(actual_contents) => {
-            let thing = get32(&actual_contents, 0);
-
-            if thing == 0x024B4E4C
-            // LNK
-            {
-                let offset = 0;
-                let lowercase_name = "output".to_string();
-                let mut end_offset = 0;
-                let mut objs: Vec<Obj> = Vec::new();
-                parse_obj_inner(
-                    &actual_contents,
-                    offset,
-                    lowercase_name,
-                    output_path,
-                    &mut objs,
-                    4,
-                    &mut end_offset,
-                    &mut actual_commands,
-                    false,
-                );
-            }
-        }
-        Err(error) => {
-            println!("Error: {:?} actual_path {}", error, actual_path);
-            std::process::exit(1);
-        }
+    if get32(&actual_contents, 0) == 0x024B4E4C
+    // LNK
+    {
+        let offset = 0;
+        let lowercase_name = "output".to_string();
+        let mut end_offset = 0;
+        let mut objs: Vec<Obj> = Vec::new();
+        parse_obj_inner(
+            &actual_contents,
+            offset,
+            lowercase_name,
+            output_path,
+            &mut objs,
+            4,
+            &mut end_offset,
+            &mut actual_commands,
+            false,
+        );
+    } else {
+        println!("actual: not an obj");
+        std::process::exit(1);
     }
 
     let header = format!("{: <32}{}", "expected", "actual");
@@ -1701,6 +1694,47 @@ fn diff_objs(expected_path: String, actual_path: String) {
             if ignore_file_name_difference(command_e, command_a) {
                 continue;
             }
+
+            if let (Command::Command2(a_cmd), Command::Command2(b_cmd)) = (command_e, command_a) {
+                // code diff
+                for (index, byte1) in a_cmd.bytes.iter().enumerate() {
+                    let byte2 = b_cmd.bytes[index];
+                    if byte1 != &byte2 {
+                        println!("Mismatched bytes: idx {} {} {}", index, byte1, byte2);
+                    }
+                }
+
+                let mut pos = 0;
+                loop {
+                    let a = disasm_at(&a_cmd.bytes, pos);
+                    let b = disasm_at(&b_cmd.bytes, pos);
+
+                    if a != b {
+                        println!(
+                            "XX {: <4X} {:08X} {: <32} {:08X} {}",
+                            pos,
+                            get32(&a_cmd.bytes, pos),
+                            a,
+                            get32(&b_cmd.bytes, pos),
+                            b
+                        );
+                    } else {
+                        println!(
+                            "   {: <4X} {:08X} {: <32} {:08X} {}",
+                            pos,
+                            get32(&a_cmd.bytes, pos),
+                            a,
+                            get32(&b_cmd.bytes, pos),
+                            b
+                        );
+                    }
+                    pos += 4;
+
+                    if pos >= a_cmd.bytes.len() {
+                        break;
+                    }
+                }
+            }
             println!("mismatch");
             std::process::exit(1);
         }
@@ -1708,6 +1742,63 @@ fn diff_objs(expected_path: String, actual_path: String) {
 
     println!("objs matched");
     std::process::exit(0);
+}
+
+fn get_obj_from_lib(input_path: &str, target_obj_name: &String) -> Option<Vec<u8>> {
+    let mut current_pos = 0;
+
+    match read_file_to_vec(input_path) {
+        Ok(file_contents) => {
+            let thing = get32(&file_contents, 0);
+            let mut base_addr: usize = 4;
+            current_pos += 4;
+
+            if thing == 0x0142494C
+            //LIB
+            {
+                loop {
+                    if current_pos + 8 > file_contents.len() {
+                        println!("end of file");
+                        break;
+                    }
+                    let byte_vec = getn(&file_contents, current_pos, 8);
+                    current_pos += 8;
+                    match String::from_utf8(byte_vec) {
+                        Ok(string) => {
+                            let date: u32 = get32(&file_contents, current_pos);
+                            current_pos += 4;
+
+                            let offset: u32 = get32(&file_contents, current_pos);
+                            current_pos += 4;
+
+                            let size: u32 = get32(&file_contents, current_pos);
+                            current_pos += 4;
+
+                            if string.trim() == target_obj_name {
+                                println!("found {}.OBJ", string.trim());
+                                let sliced = &file_contents[offset as usize + base_addr as usize
+                                    ..offset as usize + base_addr as usize + size as usize];
+                                let result_vec: Vec<u8> = sliced.to_vec();
+                                return Some(result_vec);
+                            }
+
+                            base_addr += size as usize;
+                            current_pos = base_addr;
+                        }
+                        Err(err) => {
+                            println!("Error: {}", err);
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            }
+        }
+        Err(error) => {
+            println!("Error: {:?} {}", error, input_path);
+            std::process::exit(1);
+        }
+    }
+    None
 }
 
 fn main() {
@@ -1728,10 +1819,49 @@ fn main() {
     }
 
     if args[1] == "diff" {
-        diff_objs(args[2].clone(), args[3].clone());
+        let expected_path = args[2].clone();
+        let actual_path = args[3].clone();
+        println!("comparing {} and {}", expected_path, actual_path);
+
+        match read_file_to_vec(&expected_path) {
+            Ok(expected_contents) => match read_file_to_vec(&actual_path) {
+                Ok(actual_contents) => {
+                    diff_objs(&expected_contents, &actual_contents);
+                }
+                Err(error) => {
+                    println!("Error: {:?} actual_path {}", error, actual_path);
+                    std::process::exit(1);
+                }
+            },
+            Err(error) => {
+                println!("Error: {:?} expected_path {}", error, expected_path);
+                std::process::exit(1);
+            }
+        }
+
         return;
     }
 
+    if args[1] == "diff_obj_with_lib" {
+        println!("diffing obj with lib");
+        let lib_path = args[2].clone();
+        let obj_name = args[3].clone();
+        let obj_path = args[4].clone();
+        if let Some(expected_contents) = get_obj_from_lib(&lib_path, &obj_name) {
+            match read_file_to_vec(&obj_path) {
+                Ok(actual_contents) => {
+                    diff_objs(&expected_contents, &actual_contents);
+                }
+                Err(error) => {
+                    println!("Error: {:?} actual_path {}", error, obj_path);
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            println!("error");
+            std::process::exit(1);
+        }
+    }
     let input_path = &args[1];
     let output_path = &args[2];
 
