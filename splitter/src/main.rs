@@ -1669,6 +1669,8 @@ fn diff_objs(expected_contents: &Vec<u8>, actual_contents: &Vec<u8>) {
     let header = format!("{: <32}{}", "expected", "actual");
     println!("{}", header);
 
+    let mut mismatch = false;
+
     for (command_e, command_a) in expected_commands.iter().zip(actual_commands.iter()) {
         let spacing = 20;
 
@@ -1684,13 +1686,13 @@ fn diff_objs(expected_contents: &Vec<u8>, actual_contents: &Vec<u8>) {
             .max()
             .unwrap_or(0);
 
-        // Iterate through the lines and print them side by side
-        for (line1, line2) in expected_lines.iter().zip(actual_lines.iter()) {
-            let padded_string = format!("{: <32}{}", line1, line2);
-            println!("{}", padded_string);
-        }
-
         if command_e != command_a {
+            // Iterate through the lines and print them side by side
+            for (line1, line2) in expected_lines.iter().zip(actual_lines.iter()) {
+                let padded_string = format!("{: <32}{}", line1, line2);
+                println!("+ {}", padded_string);
+            }
+
             if ignore_file_name_difference(command_e, command_a) {
                 continue;
             }
@@ -1736,8 +1738,19 @@ fn diff_objs(expected_contents: &Vec<u8>, actual_contents: &Vec<u8>) {
                 }
             }
             println!("mismatch");
-            std::process::exit(1);
+            mismatch = true;
+            // std::process::exit(1);
+        } else {
+            // Iterate through the lines and print them side by side
+            for (line1, line2) in expected_lines.iter().zip(actual_lines.iter()) {
+                let padded_string = format!("{: <32}{}", line1, line2);
+                println!("{}", padded_string);
+            }
         }
+    }
+
+    if mismatch {
+        std::process::exit(1);
     }
 
     println!("objs matched");
@@ -1800,7 +1813,7 @@ fn get_obj_from_lib(input_path: &str, target_obj_name: &String) -> Option<Vec<u8
     }
     None
 }
-
+use std::path::Path;
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -1845,8 +1858,16 @@ fn main() {
     if args[1] == "diff_obj_with_lib" {
         println!("diffing obj with lib");
         let lib_path = args[2].clone();
-        let obj_name = args[3].clone();
-        let obj_path = args[4].clone();
+        let obj_path = args[3].clone();
+
+        let file_name_without_extension = Path::new(&obj_path)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("Unknown");
+
+        let obj_name = file_name_without_extension.to_uppercase();
+
+        // let obj_path = args[4].clone();
         if let Some(expected_contents) = get_obj_from_lib(&lib_path, &obj_name) {
             match read_file_to_vec(&obj_path) {
                 Ok(actual_contents) => {
