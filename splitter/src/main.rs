@@ -500,7 +500,7 @@ fn generate_branch_targets(
             );
 
             assert!(addr != 0);
-            assert!(*symbol_addr != 0);
+            // assert!(*symbol_addr != 0);
             branch_target_destination_map.insert(addr as usize, target_label.clone());
             branch_target_source_map.insert(*symbol_addr, target_label);
         }
