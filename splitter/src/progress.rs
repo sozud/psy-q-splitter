@@ -1,14 +1,14 @@
+use crate::file_io::{get16, get32, get8, getn, read_file_to_vec, set16, set32, set8, setn};
+use crate::get_obj_from_lib;
+use crate::objs_are_mismatched;
+use crate::serialize_parse_lib;
+use crate::{Command, Section, SerializedLib, SerializedObj, Symbol};
 use rabbitizer::Instruction;
 use serde_derive::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
 use std::rc::Rc;
-use crate::file_io::{read_file_to_vec, getn, setn, get32, set32, get8, set8, get16, set16};
-use std::collections::HashMap;
-use crate::get_obj_from_lib;
-use crate::diff_objs;
-use crate::serialize_parse_lib;
-use crate::{Symbol, Section, SerializedObj, Command, SerializedLib};
 
 #[derive(Debug, Clone)]
 struct ObjProgress {
@@ -23,10 +23,15 @@ struct ObjProgress {
     data_bytes: usize,
     data_done: usize,
     rdata_bytes: usize,
-    rdata_done: usize
+    rdata_done: usize,
 }
 
-fn calculate_progress(serialized_lib: &SerializedLib, expected: &Vec<u8>, lib_path: &String, build_dir: &String)  -> Vec<ObjProgress>{
+fn calculate_progress(
+    serialized_lib: &SerializedLib,
+    expected: &Vec<u8>,
+    lib_path: &String,
+    build_dir: &String,
+) -> Vec<ObjProgress> {
     let mut progress_vec: Vec<ObjProgress> = Vec::new();
 
     for serialized_lib_obj in &serialized_lib.objs {
@@ -51,9 +56,7 @@ fn calculate_progress(serialized_lib: &SerializedLib, expected: &Vec<u8>, lib_pa
                                 .extend(std::iter::repeat(0).take(section.zeroes));
                             section.zeroes = 0;
                         }
-                        section
-                            .bytes
-                            .extend_from_slice(&cmd.bytes);
+                        section.bytes.extend_from_slice(&cmd.bytes);
                     } else {
                         println!("missing section {}", cur_section_id);
                         std::process::exit(0);
@@ -71,8 +74,7 @@ fn calculate_progress(serialized_lib: &SerializedLib, expected: &Vec<u8>, lib_pa
                         std::process::exit(0);
                     }
                 }
-                Command::Command10(cmd) => {
-                }
+                Command::Command10(cmd) => {}
                 Command::Command12(cmd) => {
                     // xdef
                     let new_struct = Symbol {
@@ -91,8 +93,7 @@ fn calculate_progress(serialized_lib: &SerializedLib, expected: &Vec<u8>, lib_pa
                         std::process::exit(0);
                     }
                 }
-                Command::Command14(cmd) => {
-                }
+                Command::Command14(cmd) => {}
                 Command::Command16(cmd) => {
                     // section
                     if let Some(section) = sections.get_mut(&(cmd.section_id as usize)) {
@@ -126,12 +127,9 @@ fn calculate_progress(serialized_lib: &SerializedLib, expected: &Vec<u8>, lib_pa
                         std::process::exit(1);
                     }
                 }
-                Command::Command28(cmd) => {
-                }
-                Command::Command46(cmd) => {
-                }
-                Command::Command48(cmd) => {
-                }
+                Command::Command28(cmd) => {}
+                Command::Command46(cmd) => {}
+                Command::Command48(cmd) => {}
                 _ => todo!(),
             }
         }
@@ -148,30 +146,25 @@ fn calculate_progress(serialized_lib: &SerializedLib, expected: &Vec<u8>, lib_pa
             data_bytes: 0,
             data_done: 0,
             rdata_bytes: 0,
-            rdata_done: 0 
+            rdata_done: 0,
         };
 
-        for (id, section) in &sections 
-        {
-            if section.name == ".text"
-            {
+        for (id, section) in &sections {
+            if section.name == ".text" {
                 cur_obj.text_bytes += section.bytes.len();
 
                 cur_obj.functions_total += section.symbols.len();
             }
-            if section.name == ".data"
-            {
+            if section.name == ".data" {
                 cur_obj.data_bytes += section.bytes.len();
             }
-            if section.name == ".bss"
-            {
+            if section.name == ".bss" {
                 cur_obj.bss_bytes += section.bytes.len();
 
                 // not sure about this
                 cur_obj.bss_bytes += section.zeroes;
             }
-            if section.name == ".rdata"
-            {
+            if section.name == ".rdata" {
                 cur_obj.rdata_bytes += section.bytes.len();
             }
         }
@@ -182,18 +175,21 @@ fn calculate_progress(serialized_lib: &SerializedLib, expected: &Vec<u8>, lib_pa
                 if let Ok(entry) = entry {
                     let file_name = entry.file_name();
 
-                    if let Some(file_str) = file_name.to_str()
-                    {
+                    if let Some(file_str) = file_name.to_str() {
                         let formatted_name = serialized_lib_obj.name.trim().to_lowercase();
                         let new_file_name = format!("{}.obj", formatted_name);
-                        
+
                         if new_file_name == file_str {
                             // found an obj, compare it.
-                            if let Some(expected_contents) = get_obj_from_lib(lib_path, &serialized_lib_obj.name) {
+                            if let Some(expected_contents) =
+                                get_obj_from_lib(lib_path, &serialized_lib_obj.name)
+                            {
                                 match read_file_to_vec(&entry.path().to_string_lossy()) {
                                     Ok(actual_contents) => {
-                                        if diff_objs(&expected_contents, &actual_contents)
-                                        {
+                                        if !objs_are_mismatched(
+                                            &expected_contents,
+                                            &actual_contents,
+                                        ) {
                                             cur_obj.done = true;
                                             cur_obj.text_done = cur_obj.text_bytes;
                                             cur_obj.functions_done = cur_obj.functions_total;
@@ -203,7 +199,11 @@ fn calculate_progress(serialized_lib: &SerializedLib, expected: &Vec<u8>, lib_pa
                                         }
                                     }
                                     Err(error) => {
-                                        println!("Error: {:?} actual_path {}", error, entry.path().to_string_lossy());
+                                        println!(
+                                            "Error: {:?} actual_path {}",
+                                            error,
+                                            entry.path().to_string_lossy()
+                                        );
                                         std::process::exit(1);
                                     }
                                 }
@@ -211,8 +211,7 @@ fn calculate_progress(serialized_lib: &SerializedLib, expected: &Vec<u8>, lib_pa
                                 println!("mismatch error");
                                 std::process::exit(1);
                             }
-
-                        }   
+                        }
                     }
                 }
             }
@@ -226,8 +225,7 @@ fn calculate_progress(serialized_lib: &SerializedLib, expected: &Vec<u8>, lib_pa
     progress_vec
 }
 
-fn print_progress(progress_vec: &Vec<ObjProgress>)
-{
+fn print_progress(progress_vec: &Vec<ObjProgress>) {
     let mut sum = ObjProgress {
         name: String::new(),
         done: false,
@@ -246,27 +244,46 @@ fn print_progress(progress_vec: &Vec<ObjProgress>)
     let mut objs_done = 0;
 
     for obj in progress_vec {
-
         println!("{}", obj.name);
-        if obj.functions_total > 0
-        {
-            println!("  funcs : {}/{} ({:.2}%)", obj.functions_done, obj.functions_total, (obj.functions_done as f64 / obj.functions_total as f64) * 100.0);
+        if obj.functions_total > 0 {
+            println!(
+                "  funcs : {}/{} ({:.2}%)",
+                obj.functions_done,
+                obj.functions_total,
+                (obj.functions_done as f64 / obj.functions_total as f64) * 100.0
+            );
         }
-        if obj.text_bytes > 0
-        {
-            println!("  .text : {}/{} ({:.2}%)", obj.text_done, obj.text_bytes, (obj.text_done as f64 / obj.text_bytes as f64) * 100.0);
+        if obj.text_bytes > 0 {
+            println!(
+                "  .text : {}/{} ({:.2}%)",
+                obj.text_done,
+                obj.text_bytes,
+                (obj.text_done as f64 / obj.text_bytes as f64) * 100.0
+            );
         }
-        if obj.data_bytes > 0
-        {
-            println!("  .data : {}/{} ({:.2}%)", obj.data_done, obj.data_bytes, (obj.data_done as f64 / obj.data_bytes as f64) * 100.0);
+        if obj.data_bytes > 0 {
+            println!(
+                "  .data : {}/{} ({:.2}%)",
+                obj.data_done,
+                obj.data_bytes,
+                (obj.data_done as f64 / obj.data_bytes as f64) * 100.0
+            );
         }
-        if obj.bss_bytes > 0
-        {
-            println!("  .bss  : {}/{} ({:.2}%)", obj.bss_done, obj.bss_bytes, (obj.bss_done as f64 / obj.bss_bytes as f64) * 100.0);
+        if obj.bss_bytes > 0 {
+            println!(
+                "  .bss  : {}/{} ({:.2}%)",
+                obj.bss_done,
+                obj.bss_bytes,
+                (obj.bss_done as f64 / obj.bss_bytes as f64) * 100.0
+            );
         }
-        if obj.rdata_bytes > 0
-        {
-            println!("  .rdata: {}/{} ({:.2}%)", obj.rdata_done, obj.rdata_bytes, (obj.rdata_done as f64 / obj.rdata_bytes as f64) * 100.0);
+        if obj.rdata_bytes > 0 {
+            println!(
+                "  .rdata: {}/{} ({:.2}%)",
+                obj.rdata_done,
+                obj.rdata_bytes,
+                (obj.rdata_done as f64 / obj.rdata_bytes as f64) * 100.0
+            );
         }
         println!("");
 
@@ -288,43 +305,71 @@ fn print_progress(progress_vec: &Vec<ObjProgress>)
 
     println!("Total");
 
-    if progress_vec.len() > 0
-    {
-        println!("  objs  : {}/{} ({:.2}%)", objs_done, progress_vec.len(), (objs_done as f64 / progress_vec.len() as f64) * 100.0);
+    if progress_vec.len() > 0 {
+        println!(
+            "  objs  : {}/{} ({:.2}%)",
+            objs_done,
+            progress_vec.len(),
+            (objs_done as f64 / progress_vec.len() as f64) * 100.0
+        );
     }
 
-    if sum.functions_total > 0
-    {
-        println!("  funcs : {}/{} ({:.2}%)", sum.functions_done, sum.functions_total, (sum.functions_done as f64 / sum.functions_total as f64) * 100.0);
+    if sum.functions_total > 0 {
+        println!(
+            "  funcs : {}/{} ({:.2}%)",
+            sum.functions_done,
+            sum.functions_total,
+            (sum.functions_done as f64 / sum.functions_total as f64) * 100.0
+        );
     }
 
-    if sum.text_bytes > 0
-    {
-        println!("  .text : {}/{} ({:.2}%)", sum.text_done, sum.text_bytes, (sum.text_done as f64 / sum.text_bytes as f64) * 100.0);
+    if sum.text_bytes > 0 {
+        println!(
+            "  .text : {}/{} ({:.2}%)",
+            sum.text_done,
+            sum.text_bytes,
+            (sum.text_done as f64 / sum.text_bytes as f64) * 100.0
+        );
     }
 
-    if sum.data_bytes > 0
-    {
-        println!("  .data : {}/{} ({:.2}%)", sum.data_done, sum.data_bytes, (sum.data_done as f64 / sum.data_bytes as f64) * 100.0);
+    if sum.data_bytes > 0 {
+        println!(
+            "  .data : {}/{} ({:.2}%)",
+            sum.data_done,
+            sum.data_bytes,
+            (sum.data_done as f64 / sum.data_bytes as f64) * 100.0
+        );
     }
 
-    if sum.bss_bytes > 0
-    {
-        println!("  .bss  : {}/{} ({:.2}%)", sum.bss_done, sum.bss_bytes, (sum.bss_done as f64 / sum.bss_bytes as f64) * 100.0);
+    if sum.bss_bytes > 0 {
+        println!(
+            "  .bss  : {}/{} ({:.2}%)",
+            sum.bss_done,
+            sum.bss_bytes,
+            (sum.bss_done as f64 / sum.bss_bytes as f64) * 100.0
+        );
     }
 
-    if sum.rdata_bytes > 0
-    {
-        println!("  .rdata: {}/{} ({:.2}%)", sum.rdata_done, sum.rdata_bytes, (sum.rdata_done as f64 / sum.rdata_bytes as f64) * 100.0);
+    if sum.rdata_bytes > 0 {
+        println!(
+            "  .rdata: {}/{} ({:.2}%)",
+            sum.rdata_done,
+            sum.rdata_bytes,
+            (sum.rdata_done as f64 / sum.rdata_bytes as f64) * 100.0
+        );
     }
 }
 
-pub fn do_progress(lib_path: &String, build_path: &String)
-{
+pub fn do_progress(lib_path: &String, build_path: &String) {
     match read_file_to_vec(lib_path) {
         Ok(file_contents) => {
             let lib = serialize_parse_lib(&file_contents);
-            let result = calculate_progress(&lib, &file_contents, &lib_path.to_string(), &build_path.to_string());
+            let result = calculate_progress(
+                &lib,
+                &file_contents,
+                &lib_path.to_string(),
+                &build_path.to_string(),
+            );
             print_progress(&result);
         }
         Err(error) => {

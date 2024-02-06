@@ -1,16 +1,16 @@
+use crate::file_io::{get16, get32, get8, getn, read_file_to_vec, set16, set32, set8, setn};
+use crate::progress::do_progress;
+use crate::serialize::*;
 use rabbitizer::{config, Abi, InstrCategory, Instruction, OperandType};
 use serde_derive::{Deserialize, Serialize};
 use serde_json;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self};
-use crate::file_io::{read_file_to_vec, getn, setn, get32, set32, get8, set8, get16, set16};
-use crate::serialize::*;
-use crate::progress::{do_progress};
 
-mod serialize;
 mod file_io;
 mod progress;
+mod serialize;
 
 struct SerializedObj {
     commands: Vec<Command>,
@@ -1396,7 +1396,7 @@ fn parse_lib(
             }
         }
         Err(error) => {
-            println!("Error: {:?} {}", error, input_path);
+            println!("parse_lib Error: {:?} input_path {}", error, input_path);
             std::process::exit(1);
         }
     }
@@ -1421,7 +1421,7 @@ fn disasm_at(code: &Vec<u8>, cur_offset: usize) -> String {
     return instruction.disassemble(None, 0);
 }
 
-fn diff_objs(expected_contents: &Vec<u8>, actual_contents: &Vec<u8>) -> bool {
+fn objs_are_mismatched(expected_contents: &Vec<u8>, actual_contents: &Vec<u8>) -> bool {
     let mut expected_commands: Vec<Command> = Vec::new();
     let output_path = "../output";
 
@@ -1550,7 +1550,6 @@ fn diff_objs(expected_contents: &Vec<u8>, actual_contents: &Vec<u8>) -> bool {
             }
             println!("mismatch");
             mismatch = true;
-            // std::process::exit(1);
         } else {
             // Iterate through the lines and print them side by side
             for (line1, line2) in expected_lines.iter().zip(actual_lines.iter()) {
@@ -1561,13 +1560,11 @@ fn diff_objs(expected_contents: &Vec<u8>, actual_contents: &Vec<u8>) -> bool {
     }
 
     if mismatch {
-        return false;
-        // std::process::exit(1);
+        return true;
     }
 
     println!("objs matched");
-    // std::process::exit(0);
-    true
+    false
 }
 
 fn get_obj_from_lib(input_path: &str, target_obj_name: &String) -> Option<Vec<u8>> {
@@ -1621,7 +1618,7 @@ fn get_obj_from_lib(input_path: &str, target_obj_name: &String) -> Option<Vec<u8
             }
         }
         Err(error) => {
-            println!("Error: {:?} {}", error, input_path);
+            println!("get_obj_from_lib Error: {:?} {}", error, input_path);
             std::process::exit(1);
         }
     }
@@ -1660,15 +1657,17 @@ fn main() {
         match read_file_to_vec(&expected_path) {
             Ok(expected_contents) => match read_file_to_vec(&actual_path) {
                 Ok(actual_contents) => {
-                    diff_objs(&expected_contents, &actual_contents);
+                    std::process::exit(
+                        objs_are_mismatched(&expected_contents, &actual_contents) as i32
+                    );
                 }
                 Err(error) => {
-                    println!("Error: {:?} actual_path {}", error, actual_path);
+                    println!("diff Error: {:?} actual_path {}", error, actual_path);
                     std::process::exit(1);
                 }
             },
             Err(error) => {
-                println!("Error: {:?} expected_path {}", error, expected_path);
+                println!("diff2 Error: {:?} expected_path {}", error, expected_path);
                 std::process::exit(1);
             }
         }
@@ -1677,9 +1676,10 @@ fn main() {
     }
 
     if args[1] == "diff_obj_with_lib" {
-        println!("diffing obj with lib");
         let lib_path = args[2].clone();
         let obj_path = args[3].clone();
+
+        println!("diffing obj with lib {} {}", lib_path, obj_path);
 
         let file_name_without_extension = Path::new(&obj_path)
             .file_stem()
@@ -1692,10 +1692,15 @@ fn main() {
         if let Some(expected_contents) = get_obj_from_lib(&lib_path, &obj_name) {
             match read_file_to_vec(&obj_path) {
                 Ok(actual_contents) => {
-                    diff_objs(&expected_contents, &actual_contents);
+                    std::process::exit(
+                        objs_are_mismatched(&expected_contents, &actual_contents) as i32
+                    );
                 }
                 Err(error) => {
-                    println!("Error: {:?} actual_path {}", error, obj_path);
+                    println!(
+                        "diff_obj_with_lib Error: {:?} actual_path {}",
+                        error, obj_path
+                    );
                     std::process::exit(1);
                 }
             }
@@ -1704,12 +1709,15 @@ fn main() {
             std::process::exit(1);
         }
     }
-    let input_path = &args[1];
-    let output_path = &args[2];
 
-    let mut objs: Vec<Obj> = Vec::new();
+    if args[1] == "extract" {
+        let input_path = &args[1];
+        let output_path = &args[2];
 
-    parse_lib(input_path, output_path, &mut objs, &None, aspsx_mode);
+        let mut objs: Vec<Obj> = Vec::new();
+
+        parse_lib(input_path, output_path, &mut objs, &None, aspsx_mode);
+    }
 }
 
 #[cfg(test)]

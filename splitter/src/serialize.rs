@@ -1,10 +1,10 @@
+use crate::file_io::{get16, get32, get8, getn, read_file_to_vec, set16, set32, set8, setn};
 use rabbitizer::Instruction;
 use serde_derive::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
 use std::rc::Rc;
-use crate::file_io::{read_file_to_vec, getn, setn, get32, set32, get8, set8, get16, set16};
-use std::collections::HashMap;
 
 #[derive(Clone, Debug, PartialEq)]
 enum RelocationTypes {
@@ -34,7 +34,7 @@ struct Function {
 pub struct CommandEnd {}
 
 #[derive(Serialize, Deserialize, PartialEq)]
-pub struct CommandCode { 
+pub struct CommandCode {
     pub len: u16,
     pub bytes: Vec<u8>,
 }
@@ -57,7 +57,7 @@ pub struct ExprConstant {
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExprAddrOfSymbol {
     pub idx: u16,
-} 
+}
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExprSectionBase {
