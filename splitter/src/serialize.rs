@@ -208,14 +208,14 @@ pub enum Command {
     Command48(CommandXbss),
 }
 
-struct SerializedObj {
+pub struct SerializedObj {
     magic: u32,
-    commands: Vec<Command>,
+    pub commands: Vec<Command>,
 }
 
-struct SerializedLib {
-    magic: u32,
-    objs: Vec<SerializedLibObj>,
+pub struct SerializedLib {
+    pub magic: u32,
+    pub objs: Vec<SerializedLibObj>,
 }
 
 fn read_expression_expr(file_contents: &Vec<u8>, offset: &mut usize, reloc_offset: usize) -> Expr {
@@ -355,15 +355,15 @@ fn write_expression(bytes: &mut Vec<u8>, pos: &mut usize, expr_: &Expr, expected
     }
 }
 
-struct SerializedLibObj {
-    name: String,
-    date: u32,
-    offset: u32,
-    size: u32,
-    obj: SerializedObj,
+pub struct SerializedLibObj {
+    pub name: String,
+    pub date: u32,
+    pub offset: u32,
+    pub size: u32,
+    pub obj: SerializedObj,
 }
 
-fn parse_lib(file_contents: &Vec<u8>) -> SerializedLib {
+pub fn serialize_parse_lib(file_contents: &Vec<u8>) -> SerializedLib {
     let mut current_pos = 0;
     let mut serialized_lib = SerializedLib {
         magic: 0,
@@ -988,7 +988,7 @@ mod tests {
         let output_path = "../output_directory";
         match read_file_to_vec(input_path) {
             Ok(file_contents) => {
-                let lib = parse_lib(&file_contents);
+                let lib = serialize_parse_lib(&file_contents);
                 let mut bytes: Vec<u8> = Vec::new();
                 serialize_lib(&lib, &mut bytes, &file_contents);
                 // assert!(file_contents.iter().eq(bytes.iter()));

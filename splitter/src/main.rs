@@ -3,12 +3,14 @@ use serde_derive::{Deserialize, Serialize};
 use serde_json;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, Read};
+use std::io::{self};
 use crate::file_io::{read_file_to_vec, getn, setn, get32, set32, get8, set8, get16, set16};
 use crate::serialize::*;
+use crate::progress::{do_progress};
 
 mod serialize;
 mod file_io;
+mod progress;
 
 struct SerializedObj {
     commands: Vec<Command>,
@@ -1419,7 +1421,7 @@ fn disasm_at(code: &Vec<u8>, cur_offset: usize) -> String {
     return instruction.disassemble(None, 0);
 }
 
-fn diff_objs(expected_contents: &Vec<u8>, actual_contents: &Vec<u8>) {
+fn diff_objs(expected_contents: &Vec<u8>, actual_contents: &Vec<u8>) -> bool {
     let mut expected_commands: Vec<Command> = Vec::new();
     let output_path = "../output";
 
@@ -1559,14 +1561,17 @@ fn diff_objs(expected_contents: &Vec<u8>, actual_contents: &Vec<u8>) {
     }
 
     if mismatch {
-        std::process::exit(1);
+        return false;
+        // std::process::exit(1);
     }
 
     println!("objs matched");
-    std::process::exit(0);
+    // std::process::exit(0);
+    true
 }
 
 fn get_obj_from_lib(input_path: &str, target_obj_name: &String) -> Option<Vec<u8>> {
+    println!("get_obj_from_lib {} {}", input_path, target_obj_name);
     let mut current_pos = 0;
 
     match read_file_to_vec(input_path) {
@@ -1580,7 +1585,7 @@ fn get_obj_from_lib(input_path: &str, target_obj_name: &String) -> Option<Vec<u8
             {
                 loop {
                     if current_pos + 8 > file_contents.len() {
-                        println!("end of file");
+                        println!("get_obj_from_lib: end of file");
                         break;
                     }
                     let byte_vec = getn(&file_contents, current_pos, 8);
@@ -1596,7 +1601,7 @@ fn get_obj_from_lib(input_path: &str, target_obj_name: &String) -> Option<Vec<u8
                             let size: u32 = get32(&file_contents, current_pos);
                             current_pos += 4;
 
-                            if string.trim() == target_obj_name {
+                            if string.trim() == target_obj_name.trim() {
                                 println!("found {}.OBJ", string.trim());
                                 let sliced = &file_contents[offset as usize + base_addr as usize
                                     ..offset as usize + base_addr as usize + size as usize];
@@ -1638,6 +1643,13 @@ fn main() {
     if args.len() < 3 {
         eprintln!("Usage: {} <input_path> <output_path>", args[0]);
         std::process::exit(1);
+    }
+
+    if args[1] == "progress" {
+        let lib_path = args[2].clone();
+        let build_path = args[3].clone();
+        do_progress(&lib_path.to_string(), &build_path.to_string());
+        std::process::exit(0);
     }
 
     if args[1] == "diff" {
