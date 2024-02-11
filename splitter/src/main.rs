@@ -1735,8 +1735,8 @@ fn main() {
     }
 
     if args[1] == "extract" {
-        let input_path = &args[1];
-        let output_path = &args[2];
+        let input_path = &args[2];
+        let output_path = &args[3];
 
         let mut objs: Vec<Obj> = Vec::new();
 
