@@ -46,7 +46,7 @@ enum RelocationTypes {
 
 use std::rc::Rc;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Relocation {
     symbol_idx: Option<u32>,
     section_idx: Option<u32>,
@@ -311,6 +311,7 @@ fn find_reloc(
         if !relocation.offset == cur_offset {
             continue;
         }
+
         if relocation.type_ == RelocationTypes::Add {
             if let (Some(left_value), Some(right_value)) =
                 (relocation.left.clone(), relocation.right.clone())
@@ -339,6 +340,22 @@ fn find_reloc(
                                         return Some(name);
                                     }
                                 } else if section_base_section.name == ".text" {
+                                    // jump to function in same file check
+                                    // right_value Relocation { symbol_idx: None, section_idx: None, value: Some(272), offset: 192, type_: Constant, left: None, right: None }
+                                    // left_value Relocation { symbol_idx: None, section_idx: Some(2), value: None, offset: 192, type_: SectionBase, left: None, right: None }
+
+                                    if right_value.offset == cur_offset {
+                                        if let Some(right_value_value) = right_value.value {
+                                            for symbol in &section.symbols {
+                                                if let Some(symbol_offset) = symbol.offset {
+                                                    if symbol_offset == right_value_value {
+                                                        return Some(symbol.name.clone());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     let name = format!(".L{:08X}", value);
 
                                     if right_value.offset == cur_offset {
@@ -672,6 +689,7 @@ fn do_code_section(
                         match branch_target_destination_map.get(symbol_addr) {
                             Some(found_target_symbol) => {
                                 let thing = instruction.disassemble(None, 0);
+
                                 if aspsx_mode {
                                     cur_func_string +=
                                         format!("{}:\r\n", found_target_symbol).as_str();
@@ -700,7 +718,6 @@ fn do_code_section(
                             match branch_target_destination_map.get(symbol_addr) {
                                 Some(found_target_symbol) => {
                                     let thing = instruction.disassemble(None, 0);
-
                                     if aspsx_mode {
                                         cur_func_string +=
                                             format!("{}:\r\n", found_target_symbol).as_str();
@@ -714,7 +731,6 @@ fn do_code_section(
 
                             let imm_override: Option<&str> = Some(&found_source_symbol);
                             let thing = instruction.disassemble(imm_override, 0);
-
                             if aspsx_mode {
                                 cur_func_string += format!("{}\r\n", thing).as_str();
                             } else {
@@ -727,7 +743,6 @@ fn do_code_section(
                             match branch_target_destination_map.get(symbol_addr) {
                                 Some(found_target_symbol) => {
                                     let thing = instruction.disassemble(None, 0);
-
                                     if aspsx_mode {
                                         cur_func_string +=
                                             format!("{}:\r\n", found_target_symbol).as_str();
@@ -821,10 +836,14 @@ fn disassemble_obj(
         for symbol in &section.symbols {
             if let Some(offset) = symbol.offset {
                 symbol_map.insert(offset as usize, symbol.clone());
+                println!(
+                    "section {} symbol name {} offset {}",
+                    section.name, symbol.name, offset
+                );
             } else {
-                println!("Offset is None");
+                println!("Offset is None for {} {}", section.name, symbol.name);
             }
-            println!("section {} symbol name {}", section.name, symbol.name);
+            // println!("section {} symbol name {}", section.name, symbol.name);
         }
 
         if section.name == ".text" {
@@ -844,7 +863,7 @@ fn disassemble_obj(
             }
         } else if section.name == ".rdata" {
             if section.bytes.len() > 0 {
-                println!("rdata section");
+                println!("rdata section len {}", section.bytes.len());
 
                 for (index, byte) in section.bytes.iter().enumerate() {
                     print!("{:02X} ", byte);
@@ -914,7 +933,8 @@ fn parse_obj_inner(
 
                 if let Some(section) = sections.get_mut(&(cur_section_id as usize)) {
                     println!(
-                        "code section cur_offset {} len {} file_contents len  {}",
+                        "code section {} cur_offset {} len {} file_contents len  {}",
+                        section.name,
                         cur_offset,
                         len,
                         file_contents.len()
@@ -949,6 +969,10 @@ fn parse_obj_inner(
                 cur_offset += 2;
                 if let Some(section) = sections.get_mut(&(cur_section_id as usize)) {
                     patch_offset = section.bytes.len();
+                    println!(
+                        "section switch to {} patch_offset {}",
+                        section.name, patch_offset
+                    );
                 }
             }
             8 => {
@@ -1861,6 +1885,15 @@ mod tests {
             "test_data/_SsInitSoundSep.s",
             "_SsInitSoundSep",
             &Some("SEPINIT".to_string()),
+        );
+    }
+
+    #[test]
+    fn test__SsSeqPlay() {
+        compare_asm(
+            "test_data/_SsSeqPlay.s",
+            "_SsSeqPlay",
+            &Some("SEQREAD".to_string()),
         );
     }
 }
