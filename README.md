@@ -1,0 +1,1 @@
+This is a binary splitting tool similar to https://github.com/ethteck/splat but intended for PS1 PSY-Q libraries. See the psy-q-decomp wiki for more information about usage https://github.com/sozud/psy-q-decomp/wiki
