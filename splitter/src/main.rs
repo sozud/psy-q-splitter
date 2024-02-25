@@ -42,6 +42,7 @@ enum RelocationTypes {
     AddressOfSymbol,
     SectionBase,
     Add,
+    Sub
 }
 
 use std::rc::Rc;
@@ -135,6 +136,28 @@ fn read_expression_recursive(
                 std::process::exit(1);
             }
         }
+        0x2e => {
+            // sub
+            let left = read_expression_recursive(file_contents, offset, reloc_offset, section);
+            let right = read_expression_recursive(file_contents, offset, reloc_offset, section);
+
+            if let (Some(left_value), Some(right_value)) = (left, right) {
+                let thing = Relocation {
+                    symbol_idx: None,
+                    section_idx: None,
+                    value: None,
+                    offset: reloc_offset,
+                    type_: RelocationTypes::Sub,
+                    left: Some(Rc::new(left_value.clone())),
+                    right: Some(Rc::new(right_value.clone())),
+                };
+
+                return Some(thing);
+            } else {
+                println!("reloc fail");
+                std::process::exit(1);
+            }
+        }
         _ => {
             println!("unknown op {:02X}", op);
             std::process::exit(1);
@@ -178,6 +201,16 @@ fn read_expression_expr(
             let right = read_expression_expr(file_contents, offset, reloc_offset, section);
 
             return Expr::Expr2C(ExprAdd {
+                left: Some(Rc::new(left.clone())),
+                right: Some(Rc::new(right.clone())),
+            });
+        }
+        0x2e => {
+            // sub
+            let left = read_expression_expr(file_contents, offset, reloc_offset, section);
+            let right = read_expression_expr(file_contents, offset, reloc_offset, section);
+
+            return Expr::Expr2E(ExprSub {
                 left: Some(Rc::new(left.clone())),
                 right: Some(Rc::new(right.clone())),
             });
@@ -249,6 +282,20 @@ fn read_expression_serialize(
                 }),
             };
         }
+        0x2e => {
+            // sub
+            let left = read_expression_expr(file_contents, offset, reloc_offset, section);
+            let right = read_expression_expr(file_contents, offset, reloc_offset, section);
+
+            return CommandReloc {
+                type_: op as u8,
+                offset: offset_v as u16,
+                expr: Expr::Expr2E(ExprSub {
+                    left: Some(Rc::new(left.clone())),
+                    right: Some(Rc::new(right.clone())),
+                }),
+            };
+        }
         _ => {
             println!("unknown op {:02X}", op);
             std::process::exit(1);
@@ -282,9 +329,12 @@ fn find_reloc(
 ) -> Option<String> {
     let mut symbols_map: HashMap<u32, Symbol> = HashMap::new();
     let mut relocs_map: HashMap<usize, Relocation> = HashMap::new();
-    for relocation in &section.relocations {
+    for (key, section_) in sections.iter() {
+    for relocation in &section_.relocations {
+        // println!("{:?}", relocation);
         relocs_map.insert(relocation.offset, relocation.clone());
     }
+}
 
     for symbol in &section.symbols {
         if let Some(symbol_number) = symbol.number {
@@ -333,10 +383,60 @@ fn find_reloc(
                                         }
                                     }
 
+                                    // for some reason some relocs use the section base instead of the variable base
+                                    // like the following:
+
+                                    // xdef name _spu_rev_attr offset 20
+                                    // Relocation { symbol_idx: None, section_idx: None, value: None, offset: 100, type_: Add, 
+                                    //     left: Some(Relocation { symbol_idx: None, section_idx: Some(3), value: None, offset: 100, type_: SectionBase, left: None, right: None }), 
+                                    //     right: Some(Relocation { symbol_idx: None, section_idx: None, value: Some(24), offset: 100, type_: Constant, left: None, right: None }) }
+
+                                    // need to determine if the address lies between two relocs and get the name
+
+
+                                    let mut sorted_symbols = section_base_section.symbols.clone(); // Clone the symbols vector
+
+                                    sorted_symbols.sort_by_key(|symbol| symbol.offset);
+
+                                    let len = sorted_symbols.len();
+
+                                    for i in 0..len {
+                                        if i + 1 < len {
+                                            let cur = &sorted_symbols[i];
+                                            let next = &sorted_symbols[i + 1];
+                                            if let Some(cur_offset_) = cur.offset {
+                                                if let Some(next_offset) = next.offset {
+                                                    if (value as usize) > cur_offset_ as usize && (value as usize) < next_offset as usize 
+                                                    {
+
+                                                        match value.checked_sub(cur_offset_) {
+                                                            Some(result) => {
+
+                                                                if cur_offset == relocation.offset
+                                                                {
+                                                                    println!("found it reloc pc {}  reloc offset {} name {} cur_offset {} next_offset {} value {}", cur_offset, relocation.offset, cur.name, cur_offset_, next_offset, value);
+                                                                    let name = format!("{}+{}", cur.name, value-cur_offset_);
+                                                                    return Some(name.clone());
+                                                                }
+
+                                                                println!("Subtraction result: {}", result)},
+                                                            None => println!("Subtraction would result in overflow!"),
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // for (cur, next) in &section_base_section.symbols.iter().zip(&section_base_section.symbols.iter().skip(1)) {
+                                    //     println!("Current: {}, Next: {}", cur, next);
+                                    // }
+
                                     // value is offset into data section
                                     let name = format!("D_{:08X}", value);
 
                                     if right_value.offset == cur_offset {
+                                        println!("~~~~~~~~~~~~~~~~~~~~~{}", name);
                                         return Some(name);
                                     }
                                 } else if section_base_section.name == ".text" {
@@ -1246,7 +1346,7 @@ fn parse_obj_inner(
                             name: string.clone(),
                         }));
 
-                        println!("xbss name {} number {}", string, number);
+                        println!("xbss name {} number {} size {}", string, number, size);
 
                         if let Some(section) = sections.get_mut(&(section_id as usize)) {
                             let new_struct = Symbol {
@@ -1817,8 +1917,7 @@ mod tests {
         }
     }
 
-    fn compare_asm(file_path: &str, name: &str, obj_name: &Option<String>) {
-        let input_path = "../psy-q/PSX/LIB/LIBSND.LIB";
+    fn compare_asm(file_path: &str, name: &str, obj_name: &Option<String>, input_path: &str) {
         let output_path = "../output_directory";
         let mut objs: Vec<Obj> = Vec::new();
 
@@ -1840,6 +1939,7 @@ mod tests {
             "test_data/_SsUtResolveADSR.s",
             "_SsUtResolveADSR",
             &Some("ADSR".to_string()),
+            "../psy-q/PSX/LIB/LIBSND.LIB",
         );
     }
 
@@ -1849,6 +1949,7 @@ mod tests {
             "test_data/_SsSndCrescendo.s",
             "_SsSndCrescendo",
             &Some("CRES".to_string()),
+            "../psy-q/PSX/LIB/LIBSND.LIB",
         );
     }
 
@@ -1858,6 +1959,7 @@ mod tests {
             "test_data/SpuVmAlloc.s",
             "SpuVmAlloc",
             &Some("VMANAGER".to_string()),
+            "../psy-q/PSX/LIB/LIBSND.LIB",
         );
     }
 
@@ -1867,6 +1969,7 @@ mod tests {
             "test_data/SpuVmVSetUp.s",
             "SpuVmVSetUp",
             &Some("VM_VSU".to_string()),
+            "../psy-q/PSX/LIB/LIBSND.LIB",
         );
     }
 
@@ -1876,6 +1979,7 @@ mod tests {
             "test_data/SsVabTransBodyPartly.s",
             "SsVabTransBodyPartly",
             &Some("VS_VTBP".to_string()),
+            "../psy-q/PSX/LIB/LIBSND.LIB",
         );
     }
 
@@ -1885,6 +1989,7 @@ mod tests {
             "test_data/_SsInitSoundSep.s",
             "_SsInitSoundSep",
             &Some("SEPINIT".to_string()),
+            "../psy-q/PSX/LIB/LIBSND.LIB",
         );
     }
 
@@ -1894,6 +1999,16 @@ mod tests {
             "test_data/_SsSeqPlay.s",
             "_SsSeqPlay",
             &Some("SEQREAD".to_string()),
+            "../psy-q/PSX/LIB/LIBSND.LIB",
         );
+    }
+
+    #[test]
+    fn test_SpuInit() {
+        compare_asm(
+            "test_data/_SpuInit.s",
+            "_SpuInit",
+            &Some("S_INI".to_string()),
+            "../psy-q/PSX/LIB/LIBSPU.LIB");
     }
 }

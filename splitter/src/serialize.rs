@@ -70,6 +70,13 @@ pub struct ExprAdd {
     pub right: Option<Rc<Expr>>,
 }
 
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExprSub {
+    pub left: Option<Rc<Expr>>,
+    pub right: Option<Rc<Expr>>,
+}
+
+
 impl PartialEq for Expr {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -112,6 +119,7 @@ pub enum Expr {
     Expr2(ExprAddrOfSymbol),
     Expr4(ExprSectionBase),
     Expr2C(ExprAdd),
+    Expr2E(ExprSub),
 }
 
 #[derive(Serialize, Deserialize, PartialEq)]
