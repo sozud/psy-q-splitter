@@ -1,5 +1,6 @@
 use crate::file_io::{get16, get32, get8, getn, read_file_to_vec, set16, set32, set8, setn};
 use crate::progress::do_progress;
+use crate::progress::send_json;
 use crate::serialize::*;
 use rabbitizer::{config, Abi, InstrCategory, Instruction, OperandType};
 use serde_derive::{Deserialize, Serialize};
@@ -1760,6 +1761,15 @@ fn main() {
             config::RabbitizerConfig_Cfg.toolchain_tweaks.sn64_div_fix = true;
         }
     }
+
+    if args[1] == "send_progress"
+    {
+        if let Err(err) = send_json() {
+            eprintln!("Error: {}", err);
+        }
+        std::process::exit(0);
+    }
+
 
     if args.len() < 3 {
         eprintln!("Usage: {} <input_path> <output_path>", args[0]);

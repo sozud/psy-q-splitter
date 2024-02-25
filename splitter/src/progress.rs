@@ -11,7 +11,7 @@ use std::fs::File;
 use std::rc::Rc;
 
 #[derive(Debug, Clone)]
-struct ObjProgress {
+pub struct ObjProgress {
     name: String,
     done: bool,
     functions_done: usize,
@@ -24,6 +24,8 @@ struct ObjProgress {
     data_done: usize,
     rdata_bytes: usize,
     rdata_done: usize,
+    json_data_bytes: usize,
+    json_data_done: usize
 }
 
 fn calculate_progress(
@@ -147,6 +149,8 @@ fn calculate_progress(
             data_done: 0,
             rdata_bytes: 0,
             rdata_done: 0,
+            json_data_bytes: 0,
+            json_data_done: 0
         };
 
         for (id, section) in &sections {
@@ -225,7 +229,7 @@ fn calculate_progress(
     progress_vec
 }
 
-fn print_progress(progress_vec: &Vec<ObjProgress>) {
+fn print_progress(progress_vec: &Vec<ObjProgress>) -> ObjProgress {
     let mut sum = ObjProgress {
         name: String::new(),
         done: false,
@@ -239,6 +243,8 @@ fn print_progress(progress_vec: &Vec<ObjProgress>) {
         data_done: 0,
         rdata_bytes: 0,
         rdata_done: 0,
+        json_data_bytes: 0,
+        json_data_done: 0
     };
 
     let mut objs_done = 0;
@@ -302,6 +308,9 @@ fn print_progress(progress_vec: &Vec<ObjProgress>) {
         sum.rdata_bytes += obj.rdata_bytes;
         sum.rdata_done += obj.rdata_done;
     }
+ 
+    sum.json_data_bytes = sum.bss_bytes + sum.data_bytes + sum.rdata_bytes;
+    sum.json_data_done = sum.bss_done + sum.data_done + sum.rdata_done;
 
     println!("Total");
 
@@ -358,9 +367,28 @@ fn print_progress(progress_vec: &Vec<ObjProgress>) {
             (sum.rdata_done as f64 / sum.rdata_bytes as f64) * 100.0
         );
     }
+
+    sum
 }
 
-pub fn do_progress(lib_path: &String, build_path: &String) {
+pub fn do_progress(lib_path: &String, build_path: &String) -> ObjProgress {
+    let default = ObjProgress {
+        name: String::new(),
+        done: false,
+        functions_done: 0,
+        functions_total: 0,
+        text_bytes: 0,
+        text_done: 0,
+        bss_bytes: 0,
+        bss_done: 0,
+        data_bytes: 0,
+        data_done: 0,
+        rdata_bytes: 0,
+        rdata_done: 0,
+        json_data_bytes: 0,
+        json_data_done: 0,
+    };
+
     match read_file_to_vec(lib_path) {
         Ok(file_contents) => {
             let lib = serialize_parse_lib(&file_contents);
@@ -370,14 +398,115 @@ pub fn do_progress(lib_path: &String, build_path: &String) {
                 &lib_path.to_string(),
                 &build_path.to_string(),
             );
-            print_progress(&result);
+            return print_progress(&result);
         }
         Err(error) => {
             println!("Error: {:?} lib_path {}", error, lib_path);
             std::process::exit(1);
         }
     }
+    default
 }
+
+use reqwest;
+use serde_json::json;
+use std::env;
+use reqwest::Client;
+use serde_json::to_string_pretty;
+
+pub fn send_json() -> Result<(), reqwest::Error> {
+    let lib_paths = vec![
+        "../psy-q/PSX/LIB/LIBSND.LIB",
+        "../psy-q/PSX/LIB/LIBSPU.LIB",
+        ];
+    let build_paths = vec![
+        "../../../build/snd",
+        "../../../build/spu"];
+    let slugs = vec![
+        "snd", 
+        "spu"];
+    
+    let mut code_info = serde_json::Map::new();
+    let mut data_info = serde_json::Map::new();
+
+    for pos in 0..lib_paths.len() {
+        let lib_path = &lib_paths[pos];
+        let build_path = &build_paths[pos];
+        let slug = &slugs[pos];
+
+        let prog = do_progress(&lib_path.to_string(), &build_path.to_string());
+    
+        // code_info.insert(
+        //     // slug.to_string(),
+        //     json!({
+        //         &format!("{}", slug): prog.text_done,
+        //         &format!("{}/total", slug): prog.text_bytes,
+        //     }),
+        // );
+        code_info.insert(
+            format!("{}", slug).into(),
+            prog.text_done.into(),
+        );
+        code_info.insert(
+            format!("{}/total", slug).into(),
+            prog.text_bytes.into(),
+        );
+
+        data_info.insert(
+            format!("{}", slug).into(),
+            prog.json_data_done.into(),
+        );
+        data_info.insert(
+            format!("{}/total", slug).into(),
+            prog.json_data_bytes.into(),
+        );
+    
+        // data_info.insert(
+        //     slug.to_string(),
+        //     json!({
+        //         &format!("{}", slug): prog.json_data_done,
+        //         &format!("{}/total", slug): prog.json_data_bytes,
+        //     }),
+        // );
+    }
+    
+    let json_data = json!({
+        "code": code_info,
+        "data": data_info,
+    });
+
+    if let Ok(pretty_json) = to_string_pretty(&json_data) {
+        println!("json_data:\n{}", pretty_json);
+    } else {
+        println!("Failed to pretty print JSON data.");
+    }
+
+    // println!("json_data: {:?}", json_data);
+
+    // std::process::exit(0);
+    let api_base_url = env::var("API_BASE_URL").expect("API_BASE_URL not set");
+    let api_secret = env::var("API_SECRET").expect("API_SECRET not set");
+
+    let client = reqwest::blocking::Client::new();
+    let url = format!("{}/data/psyq/3.5", api_base_url);
+
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .header("api_key", &api_secret)
+        .body(json_data.to_string())
+        .send()?;
+
+    println!("Response: {:?}", response);
+
+    Ok(())
+}
+
+// fn main() {
+//     if let Err(err) = send_json() {
+//         eprintln!("Error: {}", err);
+//     }
+// }
 
 #[cfg(test)]
 mod tests {

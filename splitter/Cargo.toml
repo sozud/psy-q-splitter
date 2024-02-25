@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 rabbitizer = "1.8.1"
+reqwest = {version = "0.11.24", features = ["blocking"] } 
 # serde = "1.0.196"
 serde = { version = "1.0.196", features = ["rc"] }
 serde_derive = "1.0.196"
