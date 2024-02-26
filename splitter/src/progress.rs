@@ -413,8 +413,49 @@ use serde_json::json;
 use std::env;
 use reqwest::Client;
 use serde_json::to_string_pretty;
+use git2::{Repository, Time};
 
 pub fn send_json() -> Result<(), reqwest::Error> {
+
+    let mut git_hash = String::new();
+    let mut git_timestamp = 0;
+
+    if let Ok(repo) = Repository::open("../../..") {
+        // Get the HEAD reference
+        if let Ok(head) = repo.head() {
+
+            if let Some(head_oid) = head.target() {
+                // Convert the OID to a string
+                if let hash = head_oid.to_string() {
+                    println!("Git hash: {}", hash);
+                    git_hash = hash.clone();
+                } else {
+                    println!("Failed to convert OID to string.");
+                }
+            } else {
+                println!("Failed to get target of HEAD reference.");
+            }
+
+            // Resolve the reference to a commit
+            if let Ok(commit) = head.peel_to_commit() {
+                // Get the commit's timestamp
+                let time = commit.time();
+
+                // Convert the timestamp to a human-readable string
+                let timestamp = time.seconds();
+                git_timestamp = timestamp;
+
+                println!("Commit timestamp: {}", timestamp);
+            } else {
+                println!("Failed to resolve HEAD reference to commit.");
+            }
+        } else {
+            println!("Failed to get HEAD reference.");
+        }
+    } else {
+        println!("Failed to open repository.");
+    }
+
     let lib_paths = vec![
         "../psy-q/PSX/LIB/LIBSND.LIB",
         "../psy-q/PSX/LIB/LIBSPU.LIB",
@@ -427,7 +468,11 @@ pub fn send_json() -> Result<(), reqwest::Error> {
         "spu"];
     
     let mut code_info = serde_json::Map::new();
-    let mut data_info = serde_json::Map::new();
+    let mut code_inner = serde_json::Map::new();
+    let mut data_inner = serde_json::Map::new();
+
+    code_info.insert("timestamp".into(), git_timestamp.into());
+    code_info.insert("git_hash".into(), git_hash.clone().into());
 
     for pos in 0..lib_paths.len() {
         let lib_path = &lib_paths[pos];
@@ -443,21 +488,21 @@ pub fn send_json() -> Result<(), reqwest::Error> {
         //         &format!("{}/total", slug): prog.text_bytes,
         //     }),
         // );
-        code_info.insert(
-            format!("{}", slug).into(),
+        code_inner.insert(
+            format!("{}_code", slug).into(),
             prog.text_done.into(),
         );
-        code_info.insert(
-            format!("{}/total", slug).into(),
+        code_inner.insert(
+            format!("{}_code/total", slug).into(),
             prog.text_bytes.into(),
         );
 
-        data_info.insert(
-            format!("{}", slug).into(),
+        code_inner.insert(
+            format!("{}_data", slug).into(),
             prog.json_data_done.into(),
         );
-        data_info.insert(
-            format!("{}/total", slug).into(),
+        code_inner.insert(
+            format!("{}_data/total", slug).into(),
             prog.json_data_bytes.into(),
         );
     
@@ -469,17 +514,53 @@ pub fn send_json() -> Result<(), reqwest::Error> {
         //     }),
         // );
     }
-    
-    let json_data = json!({
-        "code": code_info,
-        "data": data_info,
-    });
 
-    if let Ok(pretty_json) = to_string_pretty(&json_data) {
-        println!("json_data:\n{}", pretty_json);
-    } else {
-        println!("Failed to pretty print JSON data.");
+    // let code_wrapped = serde_json::json!({"code": serde_json::Value::Object(code_inner)});
+    // let data_wrapped = serde_json::json!({"data": serde_json::Value::Object(data_inner)});
+
+    code_info.insert(
+        "measures".into(),
+        serde_json::Value::Object(code_inner)
+    );
+
+    let mut outer = serde_json::Map::new();
+
+    outer.insert("api_key".into(), env::var("API_SECRET").expect("API_SECRET not set").into());
+    
+    let entries = vec![code_info.clone()];
+
+    outer.insert("entries".into(), entries.into());
+
+
+
+    // code_info.insert(
+    //     "measures".into(),
+    //     serde_json::Value::Object(data-wrapped)
+    // );
+
+//     let mut measures = serde_json::Map::new();
+// measures.extend(code_info);
+    
+    // let json_data = json!({
+    //     "timestamp": git_timestamp,
+    //     "git_hash": git_hash.clone(),
+    //     "measures": {
+    //         @for (key, value) in &code_info {
+    //             // Convert key-value pairs to JSON format
+    //             (key): (value),
+    //         }
+    //     }
+    // });
+    if let Ok(json_string) = serde_json::to_string(&outer) 
+    {
+        if let Ok(pretty_json) = to_string_pretty(&outer) {
+            println!("json_data:\n{}", pretty_json);
+        } else {
+            println!("Failed to pretty print JSON data.");
+        }
     }
+
+    // std::process::exit(0);
 
     // println!("json_data: {:?}", json_data);
 
@@ -488,16 +569,22 @@ pub fn send_json() -> Result<(), reqwest::Error> {
     let api_secret = env::var("API_SECRET").expect("API_SECRET not set");
 
     let client = reqwest::blocking::Client::new();
-    let url = format!("{}/data/psyq/3.5", api_base_url);
+    let url = format!("{}/data/psyq/3.5/default", api_base_url);
 
-    let response = client
+    if let Ok(json_string) = serde_json::to_string(&outer) 
+    {
+        let response = client
         .post(&url)
         .header("Content-Type", "application/json")
         .header("api_key", &api_secret)
-        .body(json_data.to_string())
+        .body(json_string)
         .send()?;
+        println!("Response: {:?}", response);
 
-    println!("Response: {:?}", response);
+    }
+
+
+
 
     Ok(())
 }
