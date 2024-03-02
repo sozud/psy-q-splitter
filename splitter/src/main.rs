@@ -1636,39 +1636,69 @@ fn objs_are_mismatched(expected_contents: &Vec<u8>, actual_contents: &Vec<u8>) -
             if let (Command::Command2(a_cmd), Command::Command2(b_cmd)) = (command_e, command_a) {
                 // code diff
                 for (index, byte1) in a_cmd.bytes.iter().enumerate() {
-                    let byte2 = b_cmd.bytes[index];
-                    if byte1 != &byte2 {
-                        println!("Mismatched bytes: idx {} {} {}", index, byte1, byte2);
+
+                    if (index < b_cmd.bytes.len())
+                    {
+                        let byte2 = b_cmd.bytes[index];
+                        if byte1 != &byte2 {
+                            println!("Mismatched bytes: idx {} {} {}", index, byte1, byte2);
+                        }
                     }
                 }
 
                 let mut pos = 0;
                 loop {
-                    let a = disasm_at(&a_cmd.bytes, pos);
-                    let b = disasm_at(&b_cmd.bytes, pos);
 
-                    if a != b {
+                    if(pos < a_cmd.bytes.len() && pos < b_cmd.bytes.len())
+                    {
+                        let a = disasm_at(&a_cmd.bytes, pos);
+                        let b = disasm_at(&b_cmd.bytes, pos);
+                        if a != b {
+                            println!(
+                                "XX {: <4X} {:08X} {: <32} {:08X} {}",
+                                pos,
+                                get32(&a_cmd.bytes, pos),
+                                a,
+                                get32(&b_cmd.bytes, pos),
+                                b
+                            );
+                        } else {
+                            println!(
+                                "   {: <4X} {:08X} {: <32} {:08X} {}",
+                                pos,
+                                get32(&a_cmd.bytes, pos),
+                                a,
+                                get32(&b_cmd.bytes, pos),
+                                b
+                            );
+                        }
+                    } 
+                    else if (pos < a_cmd.bytes.len())
+                    {
+                        let a = disasm_at(&a_cmd.bytes, pos);
+                        println!(
+                            "XX {: <4X} {:08X} {: <32}",
+                            pos,
+                            get32(&a_cmd.bytes, pos),
+                            a
+                        );
+                    }
+                    else if (pos < b_cmd.bytes.len())
+                    {
+                        let b = disasm_at(&b_cmd.bytes, pos);
                         println!(
                             "XX {: <4X} {:08X} {: <32} {:08X} {}",
                             pos,
-                            get32(&a_cmd.bytes, pos),
-                            a,
-                            get32(&b_cmd.bytes, pos),
-                            b
-                        );
-                    } else {
-                        println!(
-                            "   {: <4X} {:08X} {: <32} {:08X} {}",
-                            pos,
-                            get32(&a_cmd.bytes, pos),
-                            a,
+                            0,
+                            0,
                             get32(&b_cmd.bytes, pos),
                             b
                         );
                     }
+
                     pos += 4;
 
-                    if pos >= a_cmd.bytes.len() {
+                    if pos >= a_cmd.bytes.len() && pos >= b_cmd.bytes.len() {
                         break;
                     }
                 }
