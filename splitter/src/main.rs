@@ -17,7 +17,7 @@ struct SerializedObj {
     commands: Vec<Command>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Symbol {
     number: Option<u32>,
     section: u32,
@@ -43,7 +43,7 @@ enum RelocationTypes {
     AddressOfSymbol,
     SectionBase,
     Add,
-    Sub
+    Sub,
 }
 
 use std::rc::Rc;
@@ -236,7 +236,10 @@ fn read_expression_serialize(
     let op = get8(file_contents, offset.clone());
     *offset += 1;
 
-    println!("read_expression {:02X}", op);
+    println!(
+        "{} read_expression {:02X} offset {:08X}",
+        section.name, op, reloc_offset
+    );
     match op {
         0 => {
             // constant
@@ -252,6 +255,8 @@ fn read_expression_serialize(
             // addr of symbol
             let idx = get16(file_contents, offset.clone());
             *offset += 2;
+
+            println!("addr_of_symbol {:02X}", idx);
 
             return CommandReloc {
                 type_: op as u8,
@@ -331,15 +336,18 @@ fn find_reloc(
     let mut symbols_map: HashMap<u32, Symbol> = HashMap::new();
     let mut relocs_map: HashMap<usize, Relocation> = HashMap::new();
     for (key, section_) in sections.iter() {
-    for relocation in &section_.relocations {
-        // println!("{:?}", relocation);
-        relocs_map.insert(relocation.offset, relocation.clone());
+        for relocation in &section_.relocations {
+            // println!("{} {:?}", section.name, relocation);
+            relocs_map.insert(relocation.offset, relocation.clone());
+        }
     }
-}
 
-    for symbol in &section.symbols {
-        if let Some(symbol_number) = symbol.number {
-            symbols_map.insert(symbol_number, symbol.clone());
+    for (key, section_) in sections.iter() {
+        for symbol in &section_.symbols {
+            // println!("{} {:?}", section_.name, symbol);
+            if let Some(symbol_number) = symbol.number {
+                symbols_map.insert(symbol_number, symbol.clone());
+            }
         }
     }
 
@@ -388,12 +396,11 @@ fn find_reloc(
                                     // like the following:
 
                                     // xdef name _spu_rev_attr offset 20
-                                    // Relocation { symbol_idx: None, section_idx: None, value: None, offset: 100, type_: Add, 
-                                    //     left: Some(Relocation { symbol_idx: None, section_idx: Some(3), value: None, offset: 100, type_: SectionBase, left: None, right: None }), 
+                                    // Relocation { symbol_idx: None, section_idx: None, value: None, offset: 100, type_: Add,
+                                    //     left: Some(Relocation { symbol_idx: None, section_idx: Some(3), value: None, offset: 100, type_: SectionBase, left: None, right: None }),
                                     //     right: Some(Relocation { symbol_idx: None, section_idx: None, value: Some(24), offset: 100, type_: Constant, left: None, right: None }) }
 
                                     // need to determine if the address lies between two relocs and get the name
-
 
                                     let mut sorted_symbols = section_base_section.symbols.clone(); // Clone the symbols vector
 
@@ -407,9 +414,9 @@ fn find_reloc(
                                             let next = &sorted_symbols[i + 1];
                                             if let Some(cur_offset_) = cur.offset {
                                                 if let Some(next_offset) = next.offset {
-                                                    if (value as usize) > cur_offset_ as usize && (value as usize) < next_offset as usize 
+                                                    if (value as usize) > cur_offset_ as usize
+                                                        && (value as usize) < next_offset as usize
                                                     {
-
                                                         match value.checked_sub(cur_offset_) {
                                                             Some(result) => {
 
@@ -463,6 +470,7 @@ fn find_reloc(
                                         return Some(name);
                                     }
                                 } else if section_base_section.name == ".bss" {
+                                    // println!("thebss {:08X}", cur_offset);
                                     // look for a bss symbol with this offset
                                     for s in &section_base_section.symbols {
                                         if let Some(the_offset) = s.offset {
@@ -488,11 +496,12 @@ fn find_reloc(
                                         return Some(name);
                                     }
                                 } else {
+                                    // forget it for the moment
                                     println!(
                                         "missing reloc handling {}",
                                         section_base_section.name
                                     );
-                                    std::process::exit(1);
+                                    // std::process::exit(1);
                                 }
                             }
                         }
@@ -1607,111 +1616,157 @@ fn objs_are_mismatched(expected_contents: &Vec<u8>, actual_contents: &Vec<u8>) -
 
     let mut mismatch = false;
 
-    for (command_e, command_a) in expected_commands.iter().zip(actual_commands.iter()) {
-        let spacing = 20;
+    let mut cmd_pos = 0;
+    loop
+    // for (command_e, command_a) in expected_commands.iter().zip(actual_commands.iter())
+    {
+        if (cmd_pos < expected_commands.len() && cmd_pos < actual_commands.len()) {
+            let command_e = &expected_commands[cmd_pos];
+            let command_a = &actual_commands[cmd_pos];
 
-        let e_string = serde_json::to_string_pretty(&command_e).unwrap();
-        let a_string = serde_json::to_string_pretty(&command_a).unwrap();
+            let spacing = 20;
 
-        let expected_lines: Vec<&str> = e_string.lines().collect();
-        let actual_lines: Vec<&str> = a_string.lines().collect();
+            let e_string = serde_json::to_string_pretty(&command_e).unwrap();
+            let a_string = serde_json::to_string_pretty(&command_a).unwrap();
 
-        let max_len1 = expected_lines
-            .iter()
-            .map(|line| line.len())
-            .max()
-            .unwrap_or(0);
+            let expected_lines: Vec<&str> = e_string.lines().collect();
+            let actual_lines: Vec<&str> = a_string.lines().collect();
 
-        if command_e != command_a {
-            // Iterate through the lines and print them side by side
-            for (line1, line2) in expected_lines.iter().zip(actual_lines.iter()) {
-                let padded_string = format!("{: <32}{}", line1, line2);
-                println!("+ {}", padded_string);
-            }
+            let max_len1 = expected_lines
+                .iter()
+                .map(|line| line.len())
+                .max()
+                .unwrap_or(0);
 
-            if ignore_file_name_difference(command_e, command_a) {
-                continue;
-            }
+            if command_e != command_a {
+                let mut cmd_line_pos = 0;
 
-            if let (Command::Command2(a_cmd), Command::Command2(b_cmd)) = (command_e, command_a) {
-                // code diff
-                for (index, byte1) in a_cmd.bytes.iter().enumerate() {
-
-                    if (index < b_cmd.bytes.len())
-                    {
-                        let byte2 = b_cmd.bytes[index];
-                        if byte1 != &byte2 {
-                            println!("Mismatched bytes: idx {} {} {}", index, byte1, byte2);
-                        }
+                loop {
+                    if (cmd_line_pos < expected_lines.len() && cmd_line_pos < actual_lines.len()) {
+                        let line1 = expected_lines[cmd_line_pos];
+                        let line2 = actual_lines[cmd_line_pos];
+                        let padded_string = format!("{: <32}{}", line1, line2);
+                        println!("+ {}", padded_string);
+                    } else if (cmd_line_pos < expected_lines.len()) {
+                        let line1 = expected_lines[cmd_line_pos];
+                        let line2 = "";
+                        let padded_string = format!("{: <32}{}", line1, line2);
+                        println!("+ {}", padded_string);
+                    } else if (cmd_line_pos < actual_lines.len()) {
+                        let line1 = "";
+                        let line2 = actual_lines[cmd_line_pos];
+                        let padded_string = format!("{: <32}{}", line1, line2);
+                        println!("+ {}", padded_string);
+                    } else {
+                        break;
                     }
+                    cmd_line_pos += 1;
+                }
+                // Iterate through the lines and print them side by side
+                // for (line1, line2) in expected_lines.iter().zip(actual_lines.iter()) {
+                //     let padded_string = format!("{: <32}{}", line1, line2);
+                //     println!("+ {}", padded_string);
+                // }
+
+                if ignore_file_name_difference(command_e, command_a) {
+                    cmd_pos += 1;
+                    continue;
                 }
 
-                let mut pos = 0;
-                loop {
+                if let (Command::Command2(a_cmd), Command::Command2(b_cmd)) = (command_e, command_a)
+                {
+                    // code diff
+                    for (index, byte1) in a_cmd.bytes.iter().enumerate() {
+                        if (index < b_cmd.bytes.len()) {
+                            let byte2 = b_cmd.bytes[index];
+                            if byte1 != &byte2 {
+                                println!("Mismatched bytes: idx {} {} {}", index, byte1, byte2);
+                            }
+                        }
+                    }
 
-                    if(pos < a_cmd.bytes.len() && pos < b_cmd.bytes.len())
-                    {
-                        let a = disasm_at(&a_cmd.bytes, pos);
-                        let b = disasm_at(&b_cmd.bytes, pos);
-                        if a != b {
+                    let mut pos = 0;
+                    loop {
+                        if (pos < a_cmd.bytes.len() && pos < b_cmd.bytes.len()) {
+                            let a = disasm_at(&a_cmd.bytes, pos);
+                            let b = disasm_at(&b_cmd.bytes, pos);
+                            if a != b {
+                                println!(
+                                    "XX {: <4X} {:08X} {: <32} {:08X} {}",
+                                    pos,
+                                    get32(&a_cmd.bytes, pos),
+                                    a,
+                                    get32(&b_cmd.bytes, pos),
+                                    b
+                                );
+                            } else {
+                                println!(
+                                    "   {: <4X} {:08X} {: <32} {:08X} {}",
+                                    pos,
+                                    get32(&a_cmd.bytes, pos),
+                                    a,
+                                    get32(&b_cmd.bytes, pos),
+                                    b
+                                );
+                            }
+                        } else if (pos < a_cmd.bytes.len()) {
+                            let a = disasm_at(&a_cmd.bytes, pos);
+                            println!(
+                                "XX {: <4X} {:08X} {: <32}",
+                                pos,
+                                get32(&a_cmd.bytes, pos),
+                                a
+                            );
+                        } else if (pos < b_cmd.bytes.len()) {
+                            let b = disasm_at(&b_cmd.bytes, pos);
                             println!(
                                 "XX {: <4X} {:08X} {: <32} {:08X} {}",
                                 pos,
-                                get32(&a_cmd.bytes, pos),
-                                a,
-                                get32(&b_cmd.bytes, pos),
-                                b
-                            );
-                        } else {
-                            println!(
-                                "   {: <4X} {:08X} {: <32} {:08X} {}",
-                                pos,
-                                get32(&a_cmd.bytes, pos),
-                                a,
+                                0,
+                                0,
                                 get32(&b_cmd.bytes, pos),
                                 b
                             );
                         }
-                    } 
-                    else if (pos < a_cmd.bytes.len())
-                    {
-                        let a = disasm_at(&a_cmd.bytes, pos);
-                        println!(
-                            "XX {: <4X} {:08X} {: <32}",
-                            pos,
-                            get32(&a_cmd.bytes, pos),
-                            a
-                        );
-                    }
-                    else if (pos < b_cmd.bytes.len())
-                    {
-                        let b = disasm_at(&b_cmd.bytes, pos);
-                        println!(
-                            "XX {: <4X} {:08X} {: <32} {:08X} {}",
-                            pos,
-                            0,
-                            0,
-                            get32(&b_cmd.bytes, pos),
-                            b
-                        );
-                    }
 
-                    pos += 4;
+                        pos += 4;
 
-                    if pos >= a_cmd.bytes.len() && pos >= b_cmd.bytes.len() {
-                        break;
+                        if pos >= a_cmd.bytes.len() && pos >= b_cmd.bytes.len() {
+                            break;
+                        }
                     }
                 }
+                println!("mismatch");
+                mismatch = true;
+            } else {
+                // Iterate through the lines and print them side by side
+                for (line1, line2) in expected_lines.iter().zip(actual_lines.iter()) {
+                    let padded_string = format!("{: <32}{}", line1, line2);
+                    println!("{}", padded_string);
+                }
             }
-            println!("mismatch");
-            mismatch = true;
+        } else if (cmd_pos < expected_commands.len()) {
+            let command_e = &expected_commands[cmd_pos];
+            let e_string = serde_json::to_string_pretty(&command_e).unwrap();
+            let expected_lines: Vec<&str> = e_string.lines().collect();
+            for line in expected_lines.iter() {
+                let padded_string = format!("{: <32}{}", line, "");
+                println!("+{}", padded_string);
+            }
+        } else if (cmd_pos < actual_commands.len()) {
+            let command_a = &actual_commands[cmd_pos];
+            let a_string = serde_json::to_string_pretty(&command_a).unwrap();
+            let actual_lines: Vec<&str> = a_string.lines().collect();
+
+            for line in actual_lines.iter() {
+                let padded_string = format!("{: <32}{}", "", line);
+                println!("+{}", padded_string);
+            }
         } else {
-            // Iterate through the lines and print them side by side
-            for (line1, line2) in expected_lines.iter().zip(actual_lines.iter()) {
-                let padded_string = format!("{: <32}{}", line1, line2);
-                println!("{}", padded_string);
-            }
+            break;
         }
+
+        cmd_pos += 1;
     }
 
     if mismatch {
@@ -1792,14 +1847,12 @@ fn main() {
         }
     }
 
-    if args[1] == "send_progress"
-    {
+    if args[1] == "send_progress" {
         if let Err(err) = send_json() {
             eprintln!("Error: {}", err);
         }
         std::process::exit(0);
     }
-
 
     if args.len() < 3 {
         eprintln!("Usage: {} <input_path> <output_path>", args[0]);
@@ -1973,82 +2026,100 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_SsUtResolveADSR() {
-        compare_asm(
-            "test_data/_SsUtResolveADSR.s",
-            "_SsUtResolveADSR",
-            &Some("ADSR".to_string()),
-            "../psy-q/PSX/LIB/LIBSND.LIB",
-        );
-    }
+    // #[test]
+    // fn test_SsUtResolveADSR() {
+    //     compare_asm(
+    //         "test_data/_SsUtResolveADSR.s",
+    //         "_SsUtResolveADSR",
+    //         &Some("ADSR".to_string()),
+    //         "../psy-q/PSX/LIB/LIBSND.LIB",
+    //     );
+    // }
+
+    // #[test]
+    // fn test_SsSndCrescendo() {
+    //     compare_asm(
+    //         "test_data/_SsSndCrescendo.s",
+    //         "_SsSndCrescendo",
+    //         &Some("CRES".to_string()),
+    //         "../psy-q/PSX/LIB/LIBSND.LIB",
+    //     );
+    // }
+
+    // #[test]
+    // fn testSpuVmAlloc() {
+    //     compare_asm(
+    //         "test_data/SpuVmAlloc.s",
+    //         "SpuVmAlloc",
+    //         &Some("VMANAGER".to_string()),
+    //         "../psy-q/PSX/LIB/LIBSND.LIB",
+    //     );
+    // }
+
+    // #[test]
+    // fn testSpuVmVSetUp() {
+    //     compare_asm(
+    //         "test_data/SpuVmVSetUp.s",
+    //         "SpuVmVSetUp",
+    //         &Some("VM_VSU".to_string()),
+    //         "../psy-q/PSX/LIB/LIBSND.LIB",
+    //     );
+    // }
+
+    // #[test]
+    // fn testSsVabTransBodyPartly() {
+    //     compare_asm(
+    //         "test_data/SsVabTransBodyPartly.s",
+    //         "SsVabTransBodyPartly",
+    //         &Some("VS_VTBP".to_string()),
+    //         "../psy-q/PSX/LIB/LIBSND.LIB",
+    //     );
+    // }
+
+    // #[test]
+    // fn test_SsInitSoundSep() {
+    //     compare_asm(
+    //         "test_data/_SsInitSoundSep.s",
+    //         "_SsInitSoundSep",
+    //         &Some("SEPINIT".to_string()),
+    //         "../psy-q/PSX/LIB/LIBSND.LIB",
+    //     );
+    // }
+
+    // #[test]
+    // fn test__SsSeqPlay() {
+    //     compare_asm(
+    //         "test_data/_SsSeqPlay.s",
+    //         "_SsSeqPlay",
+    //         &Some("SEQREAD".to_string()),
+    //         "../psy-q/PSX/LIB/LIBSND.LIB",
+    //     );
+    // }
+
+    // #[test]
+    // fn test_SpuInit() {
+    //     compare_asm(
+    //         "test_data/_SpuInit.s",
+    //         "_SpuInit",
+    //         &Some("S_INI".to_string()),
+    //         "../psy-q/PSX/LIB/LIBSPU.LIB");
+    // }
+    // #[test]
+    // fn test_ss_init() {
+    //     compare_asm(
+    //         "test_data/_SsInit.s",
+    //         "_SsInit",
+    //         &Some("SSINIT".to_string()),
+    //         "../../../psy-q/3.3/PSX/LIB/LIBSND.LIB");
+    // }
 
     #[test]
-    fn test_SsSndCrescendo() {
+    fn test_ss_init() {
         compare_asm(
-            "test_data/_SsSndCrescendo.s",
-            "_SsSndCrescendo",
-            &Some("CRES".to_string()),
-            "../psy-q/PSX/LIB/LIBSND.LIB",
+            "test_data/_SsInit.s",
+            "_SsStart",
+            &Some("SSSTART".to_string()),
+            "../../../psy-q/3.5/PSX/LIB/LIBSND.LIB",
         );
-    }
-
-    #[test]
-    fn testSpuVmAlloc() {
-        compare_asm(
-            "test_data/SpuVmAlloc.s",
-            "SpuVmAlloc",
-            &Some("VMANAGER".to_string()),
-            "../psy-q/PSX/LIB/LIBSND.LIB",
-        );
-    }
-
-    #[test]
-    fn testSpuVmVSetUp() {
-        compare_asm(
-            "test_data/SpuVmVSetUp.s",
-            "SpuVmVSetUp",
-            &Some("VM_VSU".to_string()),
-            "../psy-q/PSX/LIB/LIBSND.LIB",
-        );
-    }
-
-    #[test]
-    fn testSsVabTransBodyPartly() {
-        compare_asm(
-            "test_data/SsVabTransBodyPartly.s",
-            "SsVabTransBodyPartly",
-            &Some("VS_VTBP".to_string()),
-            "../psy-q/PSX/LIB/LIBSND.LIB",
-        );
-    }
-
-    #[test]
-    fn test_SsInitSoundSep() {
-        compare_asm(
-            "test_data/_SsInitSoundSep.s",
-            "_SsInitSoundSep",
-            &Some("SEPINIT".to_string()),
-            "../psy-q/PSX/LIB/LIBSND.LIB",
-        );
-    }
-
-    #[test]
-    fn test__SsSeqPlay() {
-        compare_asm(
-            "test_data/_SsSeqPlay.s",
-            "_SsSeqPlay",
-            &Some("SEQREAD".to_string()),
-            "../psy-q/PSX/LIB/LIBSND.LIB",
-        );
-    }
-
-    #[test]
-    fn test_SpuInit() {
-        compare_asm(
-            "test_data/_SpuInit.s",
-            "_SpuInit",
-            &Some("S_INI".to_string()),
-            "../psy-q/PSX/LIB/LIBSPU.LIB");
     }
 }

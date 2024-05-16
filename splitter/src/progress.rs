@@ -25,7 +25,7 @@ pub struct ObjProgress {
     rdata_bytes: usize,
     rdata_done: usize,
     json_data_bytes: usize,
-    json_data_done: usize
+    json_data_done: usize,
 }
 
 fn calculate_progress(
@@ -150,7 +150,7 @@ fn calculate_progress(
             rdata_bytes: 0,
             rdata_done: 0,
             json_data_bytes: 0,
-            json_data_done: 0
+            json_data_done: 0,
         };
 
         for (id, section) in &sections {
@@ -244,7 +244,7 @@ fn print_progress(progress_vec: &Vec<ObjProgress>) -> ObjProgress {
         rdata_bytes: 0,
         rdata_done: 0,
         json_data_bytes: 0,
-        json_data_done: 0
+        json_data_done: 0,
     };
 
     let mut objs_done = 0;
@@ -308,7 +308,7 @@ fn print_progress(progress_vec: &Vec<ObjProgress>) -> ObjProgress {
         sum.rdata_bytes += obj.rdata_bytes;
         sum.rdata_done += obj.rdata_done;
     }
- 
+
     sum.json_data_bytes = sum.bss_bytes + sum.data_bytes + sum.rdata_bytes;
     sum.json_data_done = sum.bss_done + sum.data_done + sum.rdata_done;
 
@@ -408,22 +408,20 @@ pub fn do_progress(lib_path: &String, build_path: &String) -> ObjProgress {
     default
 }
 
-use reqwest;
-use serde_json::json;
-use std::env;
-use reqwest::Client;
-use serde_json::to_string_pretty;
 use git2::{Repository, Time};
+use reqwest;
+use reqwest::Client;
+use serde_json::json;
+use serde_json::to_string_pretty;
+use std::env;
 
 pub fn send_json() -> Result<(), reqwest::Error> {
-
     let mut git_hash = String::new();
     let mut git_timestamp = 0;
 
     if let Ok(repo) = Repository::open("../../..") {
         // Get the HEAD reference
         if let Ok(head) = repo.head() {
-
             if let Some(head_oid) = head.target() {
                 // Convert the OID to a string
                 if let hash = head_oid.to_string() {
@@ -456,17 +454,10 @@ pub fn send_json() -> Result<(), reqwest::Error> {
         println!("Failed to open repository.");
     }
 
-    let lib_paths = vec![
-        "../psy-q/PSX/LIB/LIBSND.LIB",
-        "../psy-q/PSX/LIB/LIBSPU.LIB",
-        ];
-    let build_paths = vec![
-        "../../../build/snd",
-        "../../../build/spu"];
-    let slugs = vec![
-        "snd", 
-        "spu"];
-    
+    let lib_paths = vec!["../psy-q/PSX/LIB/LIBSND.LIB", "../psy-q/PSX/LIB/LIBSPU.LIB"];
+    let build_paths = vec!["../../../build/snd", "../../../build/spu"];
+    let slugs = vec!["snd", "spu"];
+
     let mut code_info = serde_json::Map::new();
     let mut code_inner = serde_json::Map::new();
     let mut data_inner = serde_json::Map::new();
@@ -480,7 +471,7 @@ pub fn send_json() -> Result<(), reqwest::Error> {
         let slug = &slugs[pos];
 
         let prog = do_progress(&lib_path.to_string(), &build_path.to_string());
-    
+
         // code_info.insert(
         //     // slug.to_string(),
         //     json!({
@@ -488,24 +479,18 @@ pub fn send_json() -> Result<(), reqwest::Error> {
         //         &format!("{}/total", slug): prog.text_bytes,
         //     }),
         // );
-        code_inner.insert(
-            format!("{}_code", slug).into(),
-            prog.text_done.into(),
-        );
+        code_inner.insert(format!("{}_code", slug).into(), prog.text_done.into());
         code_inner.insert(
             format!("{}_code/total", slug).into(),
             prog.text_bytes.into(),
         );
 
-        code_inner.insert(
-            format!("{}_data", slug).into(),
-            prog.json_data_done.into(),
-        );
+        code_inner.insert(format!("{}_data", slug).into(), prog.json_data_done.into());
         code_inner.insert(
             format!("{}_data/total", slug).into(),
             prog.json_data_bytes.into(),
         );
-    
+
         // data_info.insert(
         //     slug.to_string(),
         //     json!({
@@ -518,29 +503,27 @@ pub fn send_json() -> Result<(), reqwest::Error> {
     // let code_wrapped = serde_json::json!({"code": serde_json::Value::Object(code_inner)});
     // let data_wrapped = serde_json::json!({"data": serde_json::Value::Object(data_inner)});
 
-    code_info.insert(
-        "measures".into(),
-        serde_json::Value::Object(code_inner)
-    );
+    code_info.insert("measures".into(), serde_json::Value::Object(code_inner));
 
     let mut outer = serde_json::Map::new();
 
-    outer.insert("api_key".into(), env::var("API_SECRET").expect("API_SECRET not set").into());
-    
+    outer.insert(
+        "api_key".into(),
+        env::var("API_SECRET").expect("API_SECRET not set").into(),
+    );
+
     let entries = vec![code_info.clone()];
 
     outer.insert("entries".into(), entries.into());
-
-
 
     // code_info.insert(
     //     "measures".into(),
     //     serde_json::Value::Object(data-wrapped)
     // );
 
-//     let mut measures = serde_json::Map::new();
-// measures.extend(code_info);
-    
+    //     let mut measures = serde_json::Map::new();
+    // measures.extend(code_info);
+
     // let json_data = json!({
     //     "timestamp": git_timestamp,
     //     "git_hash": git_hash.clone(),
@@ -551,8 +534,7 @@ pub fn send_json() -> Result<(), reqwest::Error> {
     //         }
     //     }
     // });
-    if let Ok(json_string) = serde_json::to_string(&outer) 
-    {
+    if let Ok(json_string) = serde_json::to_string(&outer) {
         if let Ok(pretty_json) = to_string_pretty(&outer) {
             println!("json_data:\n{}", pretty_json);
         } else {
@@ -569,22 +551,17 @@ pub fn send_json() -> Result<(), reqwest::Error> {
     let api_secret = env::var("API_SECRET").expect("API_SECRET not set");
 
     let client = reqwest::blocking::Client::new();
-    let url = format!("{}/data/psyq/3.5/default", api_base_url);
+    let url = format!("{}/data/psyq/3.5", api_base_url);
 
-    if let Ok(json_string) = serde_json::to_string(&outer) 
-    {
+    if let Ok(json_string) = serde_json::to_string(&outer) {
         let response = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .header("api_key", &api_secret)
-        .body(json_string)
-        .send()?;
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("api_key", &api_secret)
+            .body(json_string)
+            .send()?;
         println!("Response: {:?}", response);
-
     }
-
-
-
 
     Ok(())
 }

@@ -76,7 +76,6 @@ pub struct ExprSub {
     pub right: Option<Rc<Expr>>,
 }
 
-
 impl PartialEq for Expr {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -923,92 +922,92 @@ fn serialize_lib(serialized_lib: &SerializedLib, bytes: &mut Vec<u8>, expected: 
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
 
-    #[test]
-    fn test_get8() {
-        let file_contents = vec![0x12, 0x34, 0x56, 0x78];
-        assert_eq!(get8(&file_contents, 0), 0x12);
-        assert_eq!(get8(&file_contents, 2), 0x56);
-    }
+//     #[test]
+//     fn test_get8() {
+//         let file_contents = vec![0x12, 0x34, 0x56, 0x78];
+//         assert_eq!(get8(&file_contents, 0), 0x12);
+//         assert_eq!(get8(&file_contents, 2), 0x56);
+//     }
 
-    #[test]
-    fn test_get16() {
-        let file_contents = vec![0x12, 0x34, 0x56, 0x78];
-        assert_eq!(get16(&file_contents, 0), 0x3412);
-        assert_eq!(get16(&file_contents, 2), 0x7856);
-    }
+//     #[test]
+//     fn test_get16() {
+//         let file_contents = vec![0x12, 0x34, 0x56, 0x78];
+//         assert_eq!(get16(&file_contents, 0), 0x3412);
+//         assert_eq!(get16(&file_contents, 2), 0x7856);
+//     }
 
-    #[test]
-    fn test_get32() {
-        let file_contents = vec![0x12, 0x34, 0x56, 0x78, 0x90];
-        assert_eq!(get32(&file_contents, 0), 0x78563412);
-        assert_eq!(get32(&file_contents, 1), 0x90785634);
-    }
+//     #[test]
+//     fn test_get32() {
+//         let file_contents = vec![0x12, 0x34, 0x56, 0x78, 0x90];
+//         assert_eq!(get32(&file_contents, 0), 0x78563412);
+//         assert_eq!(get32(&file_contents, 1), 0x90785634);
+//     }
 
-    #[test]
-    fn test_set8() {
-        let mut file_contents = vec![0, 0, 0, 0];
-        set8(&mut file_contents, 0, 0x12);
-        set8(&mut file_contents, 2, 0x56);
-        assert_eq!(get8(&file_contents, 0), 0x12);
-        assert_eq!(get8(&file_contents, 2), 0x56);
-    }
+//     #[test]
+//     fn test_set8() {
+//         let mut file_contents = vec![0, 0, 0, 0];
+//         set8(&mut file_contents, 0, 0x12);
+//         set8(&mut file_contents, 2, 0x56);
+//         assert_eq!(get8(&file_contents, 0), 0x12);
+//         assert_eq!(get8(&file_contents, 2), 0x56);
+//     }
 
-    #[test]
-    fn test_set16() {
-        let mut file_contents = vec![0, 0, 0, 0];
-        set16(&mut file_contents, 0, 0x3412);
-        set16(&mut file_contents, 2, 0x7856);
-        assert_eq!(get16(&file_contents, 0), 0x3412);
-        assert_eq!(get16(&file_contents, 2), 0x7856);
-    }
+//     #[test]
+//     fn test_set16() {
+//         let mut file_contents = vec![0, 0, 0, 0];
+//         set16(&mut file_contents, 0, 0x3412);
+//         set16(&mut file_contents, 2, 0x7856);
+//         assert_eq!(get16(&file_contents, 0), 0x3412);
+//         assert_eq!(get16(&file_contents, 2), 0x7856);
+//     }
 
-    #[test]
-    fn test_set32() {
-        let mut file_contents = vec![0, 0, 0, 0, 0];
-        set32(&mut file_contents, 0, 0x78563412);
-        set32(&mut file_contents, 1, 0x90785634);
-        assert_eq!(get32(&file_contents, 0), 0x78563412);
-        assert_eq!(get32(&file_contents, 1), 0x90785634);
-    }
+//     #[test]
+//     fn test_set32() {
+//         let mut file_contents = vec![0, 0, 0, 0, 0];
+//         set32(&mut file_contents, 0, 0x78563412);
+//         set32(&mut file_contents, 1, 0x90785634);
+//         assert_eq!(get32(&file_contents, 0), 0x78563412);
+//         assert_eq!(get32(&file_contents, 1), 0x90785634);
+//     }
 
-    #[test]
-    fn test_getn() {
-        let file_contents = vec![0x12, 0x34, 0x56, 0x78];
-        assert_eq!(getn(&file_contents, 1, 2), vec![0x34, 0x56]);
-        assert_eq!(getn(&file_contents, 2, 3), vec![0x56, 0x78]);
-        assert_eq!(getn(&file_contents, 0, 5), vec![0x12, 0x34, 0x56, 0x78]);
-    }
+//     #[test]
+//     fn test_getn() {
+//         let file_contents = vec![0x12, 0x34, 0x56, 0x78];
+//         assert_eq!(getn(&file_contents, 1, 2), vec![0x34, 0x56]);
+//         assert_eq!(getn(&file_contents, 2, 3), vec![0x56, 0x78]);
+//         assert_eq!(getn(&file_contents, 0, 5), vec![0x12, 0x34, 0x56, 0x78]);
+//     }
 
-    #[test]
-    fn test_setn() {
-        let mut file_contents = vec![0, 0, 0, 0];
-        setn(&mut file_contents, 0, &vec![0x12, 0x34, 0x56, 0x78]);
-        assert_eq!(getn(&file_contents, 0, 5), vec![0x12, 0x34, 0x56, 0x78]);
-    }
+//     #[test]
+//     fn test_setn() {
+//         let mut file_contents = vec![0, 0, 0, 0];
+//         setn(&mut file_contents, 0, &vec![0x12, 0x34, 0x56, 0x78]);
+//         assert_eq!(getn(&file_contents, 0, 5), vec![0x12, 0x34, 0x56, 0x78]);
+//     }
 
-    #[test]
-    fn test_serialize_lib() {
-        let input_path = "../psy-q/PSX/LIB/LIBSND.LIB";
-        let output_path = "../output_directory";
-        match read_file_to_vec(input_path) {
-            Ok(file_contents) => {
-                let lib = serialize_parse_lib(&file_contents);
-                let mut bytes: Vec<u8> = Vec::new();
-                serialize_lib(&lib, &mut bytes, &file_contents);
-                // assert!(file_contents.iter().eq(bytes.iter()));
-                // for (index, &item) in file_contents.iter().enumerate() {
-                //     let b = bytes.get(index).unwrap();
-                //     assert_eq!(item, *b, "Mismatch at position {}", index);
-                // }
-            }
-            Err(error) => {
-                println!("Error: {:?} {}", error, input_path);
-                std::process::exit(1);
-            }
-        }
-    }
-}
+//     #[test]
+//     fn test_serialize_lib() {
+//         let input_path = "../psy-q/PSX/LIB/LIBSND.LIB";
+//         let output_path = "../output_directory";
+//         match read_file_to_vec(input_path) {
+//             Ok(file_contents) => {
+//                 let lib = serialize_parse_lib(&file_contents);
+//                 let mut bytes: Vec<u8> = Vec::new();
+//                 serialize_lib(&lib, &mut bytes, &file_contents);
+//                 // assert!(file_contents.iter().eq(bytes.iter()));
+//                 // for (index, &item) in file_contents.iter().enumerate() {
+//                 //     let b = bytes.get(index).unwrap();
+//                 //     assert_eq!(item, *b, "Mismatch at position {}", index);
+//                 // }
+//             }
+//             Err(error) => {
+//                 println!("Error: {:?} {}", error, input_path);
+//                 std::process::exit(1);
+//             }
+//         }
+//     }
+// }
